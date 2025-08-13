@@ -3,7 +3,29 @@ services:
     name: evolux-whatsapp-agent
     env: node
     plan: starter
-    buildCommand: npm install
+    buildCommand: |
+      apt-get update && apt-get install -y \
+        ca-certificates \
+        fonts-liberation \
+        libappindicator3-1 \
+        libasound2 \
+        libatk-bridge2.0-0 \
+        libdrm2 \
+        libgtk-3-0 \
+        libnspr4 \
+        libnss3 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxrandr2 \
+        xdg-utils \
+        libxss1 \
+        libxtst6 \
+        libx11-xcb1 \
+        libxcb-dri3-0 \
+        libdrm2 \
+        libgbm1 \
+        libasound2
+      npm install
     startCommand: npm start
     envVars:
       - key: NODE_ENV
@@ -11,9 +33,7 @@ services:
       - key: PORT
         value: 10000
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
-        value: "true"
-      - key: PUPPETEER_EXECUTABLE_PATH
-        value: "/usr/bin/google-chrome-stable"
+        value: "false"
       - key: PUPPETEER_ARGS
         value: "--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu"
     healthCheckPath: /health

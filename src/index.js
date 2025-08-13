@@ -6,8 +6,7 @@ const config = require('./config/config');
 
 // Configurações específicas para Render
 if (process.env.NODE_ENV === 'production') {
-  process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = 'true';
-  process.env.PUPPETEER_EXECUTABLE_PATH = '/usr/bin/google-chrome-stable';
+  process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = 'false';
   process.env.PUPPETEER_ARGS = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu';
 }
 
@@ -45,7 +44,7 @@ app.get('/health', (req, res) => {
     nodeVersion: process.version,
     puppeteerConfig: {
       skipDownload: process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
+      args: process.env.PUPPETEER_ARGS
     }
   });
 });
@@ -58,7 +57,7 @@ async function initializeServices() {
     console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
     console.log(`🔧 Puppeteer config:`, {
       skipDownload: process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
+      args: process.env.PUPPETEER_ARGS
     });
     
     // Inicializa banco de dados
@@ -85,7 +84,7 @@ async function initializeServices() {
     console.log('🔄 Inicializando WhatsApp...');
     const whatsappPromise = whatsappClient.initialize();
     const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('WhatsApp timeout')), 60000)
+      setTimeout(() => reject(new Error('WhatsApp timeout')), 120000) // 2 minutos
     );
     
     await Promise.race([whatsappPromise, timeoutPromise]);
@@ -101,7 +100,7 @@ async function initializeServices() {
     console.error('Stack trace:', error.stack);
     
     // Se for erro do WhatsApp, continua sem ele
-    if (error.message.includes('WhatsApp')) {
+    if (error.message.includes('WhatsApp') || error.message.includes('browser')) {
       console.log('⚠️ Continuando sem WhatsApp...');
     } else {
       process.exit(1);

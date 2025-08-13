@@ -49,8 +49,7 @@ class WhatsAppClientSimple {
           '--disable-features=NetworkService'
         ],
         timeout: 120000,
-        protocolTimeout: 120000,
-        executablePath: process.platform === 'win32' ? undefined : '/usr/bin/google-chrome-stable'
+        protocolTimeout: 120000
       }
     });
 

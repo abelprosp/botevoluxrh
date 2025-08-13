@@ -11,12 +11,6 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 
-# Database
-database/
-*.db
-*.sqlite
-*.sqlite3
-
 # Logs
 logs/
 *.log
@@ -38,7 +32,6 @@ coverage/
 .nyc_output
 
 # Dependency directories
-node_modules/
 jspm_packages/
 
 # Optional npm cache directory
@@ -74,7 +67,6 @@ jspm_packages/
 dist
 
 # Gatsby files
-.cache/
 public
 
 # Storybook build outputs
@@ -98,16 +90,18 @@ temp/
 ._*
 .Spotlight-V100
 .Trashes
-ehthumbs.db
-Thumbs.db
 
-# WhatsApp session data
-.wwebjs_auth/
+# WhatsApp Web cache (mantém os arquivos JS mas ignora cache)
 .wwebjs_cache/
+.wwebjs_auth/
 
-# Vercel
-.vercel
+# Banco de dados local (apenas arquivos .db, mantém os .js)
+*.db
+*.sqlite
+*.sqlite3
 
-# Test files
+# Arquivos de teste (opcional)
 test-*.js
 debug-*.js
+*.test.js
+*.spec.js

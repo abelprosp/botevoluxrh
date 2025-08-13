@@ -2,21 +2,26 @@
   "version": 2,
   "builds": [
     {
-      "src": "src/index.js",
+      "src": "src/api-only.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
       "src": "/",
-      "dest": "src/index.js"
+      "dest": "src/api-only.js"
     },
     {
       "src": "/(.*)",
-      "dest": "src/index.js"
+      "dest": "src/api-only.js"
     }
   ],
   "env": {
     "NODE_ENV": "production"
+  },
+  "functions": {
+    "src/api-only.js": {
+      "maxDuration": 30
+    }
   }
 }

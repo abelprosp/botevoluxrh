@@ -2,22 +2,26 @@
   "version": 2,
   "builds": [
     {
-      "src": "src/index.js",
+      "src": "src/api-only.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
       "src": "/",
-      "dest": "src/index.js"
+      "dest": "src/api-only.js"
     },
     {
       "src": "/health",
-      "dest": "src/index.js"
+      "dest": "src/api-only.js"
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "src/api-only.js"
     },
     {
       "src": "/(.*)",
-      "dest": "src/index.js"
+      "dest": "src/api-only.js"
     }
   ],
   "env": {

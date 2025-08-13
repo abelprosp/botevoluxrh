@@ -53,5 +53,8 @@
   "bugs": {
     "url": "https://github.com/evolux/evolux-whatsapp-agent/issues"
   },
-  "homepage": "https://evoluxrh.com.br"
+  "homepage": "https://evoluxrh.com.br",
+  "config": {
+    "puppeteer_skip_chromium_download": "true"
+  }
 }

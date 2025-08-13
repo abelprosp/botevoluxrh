@@ -6,8 +6,9 @@ const config = require('./config/config');
 
 // Configurações específicas para Render
 if (process.env.NODE_ENV === 'production') {
-  process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = 'false';
-  process.env.PUPPETEER_EXECUTABLE_PATH = '/usr/bin/google-chrome';
+  process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = 'true';
+  process.env.PUPPETEER_EXECUTABLE_PATH = '/usr/bin/google-chrome-stable';
+  process.env.PUPPETEER_ARGS = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --disable-gpu';
 }
 
 // Importa os serviços
@@ -41,7 +42,11 @@ app.get('/health', (req, res) => {
     service: 'Evolux Agent',
     version: '2.0.0',
     environment: 'render',
-    nodeVersion: process.version
+    nodeVersion: process.version,
+    puppeteerConfig: {
+      skipDownload: process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
+    }
   });
 });
 
@@ -51,6 +56,10 @@ async function initializeServices() {
     console.log('🚀 Iniciando Evolux WhatsApp Agent no Render...');
     console.log(`📦 Node.js version: ${process.version}`);
     console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
+    console.log(`🔧 Puppeteer config:`, {
+      skipDownload: process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH
+    });
     
     // Inicializa banco de dados
     const database = new Database();

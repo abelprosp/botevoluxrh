@@ -1,41 +1,100 @@
-const EvoluxAgent = require('./agent');
-const Dashboard = require('./web/dashboard');
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const config = require('./config/config');
 
-async function main() {
+// Importa os serviços
+const Database = require('./database/database');
+const GroqClient = require('./ai/groqClient');
+const WhatsAppClientSimple = require('./whatsapp/whatsappClientSimple');
+const APIServer = require('./api/server');
+const DashboardServer = require('./web/dashboard');
+
+const app = express();
+
+// Middleware de segurança
+app.use(helmet({
+  contentSecurityPolicy: false // Necessário para o dashboard
+}));
+app.use(cors());
+app.use(express.json());
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 100 // limite por IP
+});
+app.use(limiter);
+
+// Health check para Render
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date().toISOString(),
+    service: 'Evolux Agent',
+    version: '2.0.0',
+    environment: 'render'
+  });
+});
+
+// Inicialização dos serviços
+async function initializeServices() {
   try {
-    console.log('🚀 Iniciando Agente Evolux Soluções de RH...');
+    console.log('🚀 Iniciando Evolux WhatsApp Agent no Render...');
     
-    // Inicia o agente principal
-    const agent = new EvoluxAgent();
-    await agent.start();
+    // Inicializa banco de dados
+    const database = new Database();
+    console.log('✅ Banco de dados inicializado');
     
-    // Inicia o dashboard web
-    const dashboard = new Dashboard();
-    dashboard.start();
+    // Inicializa cliente Groq
+    const groqClient = new GroqClient();
+    console.log('✅ Cliente Groq inicializado');
     
-    console.log('✅ Sistema iniciado com sucesso!');
-    console.log('📊 Endpoints disponíveis:');
-    console.log('   - Status: http://localhost:3000/health');
-    console.log('   - WhatsApp Status: http://localhost:3000/whatsapp/status');
-    console.log('   - Vagas: http://localhost:3000/jobs');
-    console.log('   - Estatísticas: http://localhost:3000/stats');
-    console.log('   - Dashboard Web: http://localhost:3003');
+    // Inicializa cliente WhatsApp
+    const whatsappClient = new WhatsAppClientSimple();
+    console.log('✅ Cliente WhatsApp inicializado');
+    
+    // Inicializa servidor da API
+    const apiServer = new APIServer(database, whatsappClient);
+    console.log('✅ Servidor API inicializado');
+    
+    // Inicializa servidor do dashboard
+    const dashboardServer = new DashboardServer(database, whatsappClient);
+    console.log('✅ Servidor Dashboard inicializado');
+    
+    // Inicializa WhatsApp
+    await whatsappClient.initialize();
+    console.log('✅ WhatsApp inicializado');
+    
+    console.log('🎉 Todos os serviços inicializados com sucesso!');
+    console.log(` Dashboard: http://localhost:${config.dashboard.port}`);
+    console.log(`🔗 API: http://localhost:${config.server.port}`);
+    console.log(` Health: http://localhost:${config.server.port}/health`);
     
   } catch (error) {
-    console.error('❌ Erro ao iniciar o sistema:', error);
+    console.error('❌ Erro ao inicializar serviços:', error);
     process.exit(1);
   }
 }
 
-// Tratamento de sinais para encerramento gracioso
-process.on('SIGINT', async () => {
-  console.log('\n🛑 Encerrando sistema...');
-  process.exit(0);
+// Inicializa serviços
+initializeServices();
+
+// Middleware de erro
+app.use((err, req, res, next) => {
+  console.error('Erro:', err);
+  res.status(500).json({ 
+    error: 'Erro interno do servidor',
+    message: err.message 
+  });
 });
 
-process.on('SIGTERM', async () => {
-  console.log('\n🛑 Encerrando sistema...');
-  process.exit(0);
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(` Servidor principal rodando na porta ${PORT}`);
+  console.log(` Health check: http://localhost:${PORT}/health`);
 });
 
-main().catch(console.error);
+module.exports = app;

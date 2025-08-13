@@ -1,10 +1,50 @@
-node_modules
-npm-debug.log
+# Dependências
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Arquivos de ambiente
 .env
 .env.local
-.DS_Store
-*.log
-database/*.db
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
 logs/
+*.log
+
+# Cache do WhatsApp Web
 .wwebjs_cache/
 .wwebjs_auth/
+
+# Banco de dados local
+database/*.db
+*.sqlite
+*.sqlite3
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
+
+# Arquivos temporários
+*.tmp
+*.temp
+
+# Arquivos de teste
+test-*.js
+debug-*.js
+*.test.js
+*.spec.js
+
+# Documentação
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# Vercel
+vercel.json

@@ -4,6 +4,12 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const config = require('./config/config');
 
+// Configurações específicas para Render
+if (process.env.NODE_ENV === 'production') {
+  process.env.PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = 'false';
+  process.env.PUPPETEER_EXECUTABLE_PATH = '/usr/bin/google-chrome';
+}
+
 // Importa os serviços
 const Database = require('./database/database');
 const GroqClient = require('./ai/groqClient');
@@ -34,7 +40,8 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     service: 'Evolux Agent',
     version: '2.0.0',
-    environment: 'render'
+    environment: 'render',
+    nodeVersion: process.version
   });
 });
 
@@ -42,6 +49,8 @@ app.get('/health', (req, res) => {
 async function initializeServices() {
   try {
     console.log('🚀 Iniciando Evolux WhatsApp Agent no Render...');
+    console.log(`📦 Node.js version: ${process.version}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
     
     // Inicializa banco de dados
     const database = new Database();
@@ -63,8 +72,14 @@ async function initializeServices() {
     const dashboardServer = new DashboardServer(database, whatsappClient);
     console.log('✅ Servidor Dashboard inicializado');
     
-    // Inicializa WhatsApp
-    await whatsappClient.initialize();
+    // Inicializa WhatsApp com timeout
+    console.log('🔄 Inicializando WhatsApp...');
+    const whatsappPromise = whatsappClient.initialize();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('WhatsApp timeout')), 60000)
+    );
+    
+    await Promise.race([whatsappPromise, timeoutPromise]);
     console.log('✅ WhatsApp inicializado');
     
     console.log('🎉 Todos os serviços inicializados com sucesso!');
@@ -74,7 +89,14 @@ async function initializeServices() {
     
   } catch (error) {
     console.error('❌ Erro ao inicializar serviços:', error);
-    process.exit(1);
+    console.error('Stack trace:', error.stack);
+    
+    // Se for erro do WhatsApp, continua sem ele
+    if (error.message.includes('WhatsApp')) {
+      console.log('⚠️ Continuando sem WhatsApp...');
+    } else {
+      process.exit(1);
+    }
   }
 }
 
@@ -93,8 +115,8 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(` Servidor principal rodando na porta ${PORT}`);
-  console.log(` Health check: http://localhost:${PORT}/health`);
+  console.log(`🚀 Servidor principal rodando na porta ${PORT}`);
+  console.log(`✅ Health check: http://localhost:${PORT}/health`);
 });
 
 module.exports = app;

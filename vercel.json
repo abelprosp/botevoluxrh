@@ -8,6 +8,10 @@
   ],
   "routes": [
     {
+      "src": "/dashboard",
+      "dest": "src/api-only.js"
+    },
+    {
       "src": "/",
       "dest": "src/api-only.js"
     },

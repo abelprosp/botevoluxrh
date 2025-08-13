@@ -6,10 +6,16 @@ module.exports = {
     model: 'llama3-8b-8192'
   },
   
+  supabase: {
+    url: process.env.SUPABASE_URL || 'https://your-project.supabase.co',
+    key: process.env.SUPABASE_ANON_KEY || 'your-anon-key'
+  },
+  
   company: {
     name: 'Evolux Soluções de RH',
     website: 'https://evoluxrh.com.br',
-    email: 'contato@evoluxrh.com.br'
+    email: 'contato@evoluxrh.com.br',
+    registrationLink: 'https://app.pipefy.com/public/form/a19wdDh_'
   },
   
   server: {

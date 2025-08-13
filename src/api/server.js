@@ -447,7 +447,7 @@ class APIServer {
     // Endpoints para notificações
     this.app.get('/notifications/companies', async (req, res) => {
       try {
-        const notifications = await this.database.getCompanyNotifications();
+        const notifications = await this.database.getNotifications('company');
         res.json({ success: true, data: notifications });
       } catch (error) {
         console.error('Erro ao buscar notificações de empresas:', error);
@@ -457,7 +457,7 @@ class APIServer {
 
     this.app.get('/notifications/others', async (req, res) => {
       try {
-        const notifications = await this.database.getOtherNotifications();
+        const notifications = await this.database.getNotifications('other');
         res.json({ success: true, data: notifications });
       } catch (error) {
         console.error('Erro ao buscar notificações de outros assuntos:', error);
@@ -467,7 +467,7 @@ class APIServer {
 
     this.app.get('/notifications/candidates', async (req, res) => {
       try {
-        const notifications = await this.database.getCandidateNotifications();
+        const notifications = await this.database.getNotifications('candidate');
         res.json({ success: true, data: notifications });
       } catch (error) {
         console.error('Erro ao buscar notificações de candidatos:', error);
@@ -477,7 +477,7 @@ class APIServer {
 
     this.app.get('/notifications/all', async (req, res) => {
       try {
-        const notifications = await this.database.getAllNotifications();
+        const notifications = await this.database.getNotifications();
         res.json({ success: true, data: notifications });
       } catch (error) {
         console.error('Erro ao buscar todas as notificações:', error);

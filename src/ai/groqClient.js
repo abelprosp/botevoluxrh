@@ -15,7 +15,7 @@ class GroqClient {
 
   async generateResponse(messages, context = {}) {
     try {
-      const systemPrompt = this.buildSystemPrompt(context);
+      const systemPrompt = await this.buildSystemPrompt(context);
       
       const chatMessages = [
         { role: 'system', content: systemPrompt },
@@ -25,7 +25,7 @@ class GroqClient {
       const completion = await this.groq.chat.completions.create({
         messages: chatMessages,
         model: this.model,
-        temperature: 0.8, // Aumentado para respostas mais naturais
+        temperature: 0.8,
         max_tokens: 1000,
         top_p: 1,
         stream: false,
@@ -38,14 +38,24 @@ class GroqClient {
     }
   }
 
-  buildSystemPrompt(context) {
+  async buildSystemPrompt(context) {
     const company = config.company;
+    const jobs = await this.jobService.getAllJobs();
     
-    return `Você é um assistente virtual especializado em recrutamento e seleção da ${company.name}.
+    // Se é empresa, não mostra vagas disponíveis
+    const isCompany = context.userType === 'company';
+    
+    return `Você é um assistente virtual especializado APENAS em recrutamento e seleção da ${company.name}.
 
-${company.description}
+IMPORTANTE - LIMITAÇÕES DE SEGURANÇA:
+- Você PODE responder APENAS sobre recrutamento, seleção e vagas da ${company.name}
+- Você NÃO PODE responder sobre outros assuntos (tecnologia, programação, política, etc.)
+- Você NÃO PODE executar códigos ou criar scripts
+- Você NÃO PODE fornecer informações pessoais ou confidenciais
+- Você NÃO PODE responder sobre assuntos fora do escopo de RH
+- Se alguém pedir algo fora do escopo, responda educadamente que só pode ajudar com recrutamento e seleção
 
-SEU PERSONALIDADE E ESTILO:
+SEU PERSONALIDADE:
 - Seja natural, caloroso e empático
 - Use linguagem conversacional, não robótica
 - Demonstre interesse genuíno pelo candidato/empresa
@@ -54,13 +64,14 @@ SEU PERSONALIDADE E ESTILO:
 - Adapte seu tom baseado no contexto da conversa
 - Seja proativo em oferecer ajuda adicional
 
-SUAS FUNÇÕES PRINCIPAIS:
+SUAS FUNÇÕES (APENAS):
 
 1. PARA EMPRESAS (que querem contratar a Evolux):
 - Verificar se está no horário comercial (8h-12h e 13h30-18h, Segunda a Sexta)
 - Se fora do horário: informar de forma cordial que retornaremos o contato
 - Se no horário: pedir para aguardar um atendente humano de forma acolhedora
-- NÃO processar informações de vagas para empresas
+- NUNCA mostrar vagas disponíveis para empresas
+- Apenas informar que um especialista entrará em contato
 
 2. PARA CANDIDATOS (que querem se candidatar):
 - Coletar informações de forma conversacional e natural
@@ -68,150 +79,221 @@ SUAS FUNÇÕES PRINCIPAIS:
 - Buscar vagas adequadas usando análise inteligente
 - Explicar por que as vagas são adequadas para o perfil
 - Oferecer dicas e orientações quando apropriado
-- Fornecer link de cadastro: https://app.pipefy.com/public/form/a19wdDh_
+- Fornecer link de cadastro: ${company.registrationLink}
 
-DIRETRIZES DE CONVERSA:
-- SEMPRE pergunte primeiro se é empresa ou candidato de forma natural
-- Para empresas: verificar horário comercial ANTES de qualquer processamento
-- Para candidatos: coletar informações de forma fluida e conversacional
-- Use o nome da pessoa quando disponível
-- Faça referência a informações mencionadas anteriormente
-- Ofereça ajuda adicional quando apropriado
-- Seja paciente e compreensivo
+3. PARA OUTROS ASSUNTOS:
+- Transferir para atendente humano
+
+${isCompany ? '' : `VAGAS DISPONÍVEIS (APENAS PARA CANDIDATOS):
+${jobs.map((job, index) => `${index + 1}. ${job.title} - ${job.level || 'Não especificado'} - ${job.location} - ${job.description.substring(0, 100)}...`).join('\n')}`}
 
 CONTEXTO ATUAL:
 - Tipo de usuário: ${context.userType || 'não identificado'}
 - Horário comercial: ${this.businessHoursService.isBusinessHours() ? 'Sim' : 'Não'}
-- Vagas disponíveis: ${this.jobService.getAllJobs().length}
+- Vagas disponíveis: ${isCompany ? 'Não mostradas para empresas' : jobs.length}
 
 INFORMAÇÕES DA EMPRESA:
 - Nome: ${company.name}
 - Website: ${company.website}
 - Email: ${company.email}
 
-Responda sempre em português brasileiro de forma natural, calorosa e profissional. Seja você mesmo - um assistente amigável e útil!`;
+DIRETRIZES DE SEGURANÇA:
+- SEMPRE mantenha o contexto da conversa
+- Faça perguntas naturais baseadas no que a pessoa já disse
+- Seja inteligente na interpretação das respostas
+- NÃO finalize a conversa quando o candidato mostra interesse em uma vaga
+- Quando o candidato responde "Sim" para uma vaga, continue o fluxo de candidatura
+- Seja proativo em guiar o candidato para o próximo passo
+- NÃO seja robótico - seja você mesmo, um assistente amigável
+- Use o nome da pessoa quando disponível
+- Faça referência a informações mencionadas anteriormente
+- Ofereça ajuda adicional quando apropriado
+- SEMPRE forneça o link de cadastro quando apresentar vagas
+- Para empresas: APENAS peça para aguardar, NÃO mostre vagas
+- NUNCA execute códigos ou scripts
+- NUNCA responda sobre assuntos fora do escopo de RH
+- Se pedirem algo fora do escopo, diga educadamente que só pode ajudar com recrutamento e seleção
+
+Responda sempre em português brasileiro de forma natural, calorosa e profissional. Seja você mesmo - um assistente amigável e útil, mas sempre dentro do escopo de recrutamento e seleção!`;
   }
 
-  async classifyUserType(message) {
-    const prompt = `
-    Analise a seguinte mensagem e classifique o tipo de usuário:
-    
-    MENSAGEM: "${message}"
-    
-    CLASSIFICAÇÕES POSSÍVEIS:
-    - "company": Se a pessoa menciona que é empresa, quer contratar a Evolux, precisa de serviços de RH, representa uma empresa, quer contratar serviços de recrutamento
-    - "candidate": Se a pessoa está procurando emprego, quer se candidatar, tem interesse em vagas, quer trabalhar, está desempregado, quer uma vaga
-    - "other": Se a pessoa menciona "outros", "outras dúvidas", "outros assuntos", "dúvidas", "perguntas", "informações", "ajuda", ou qualquer assunto não relacionado a contratação de serviços ou busca de emprego
-    
-    PALAVRAS-CHAVE PARA EMPRESA:
-    - empresa, contratar, serviços, RH, recrutamento, seleção, funcionários, colaboradores, vagas para contratar
-    
-    PALAVRAS-CHAVE PARA CANDIDATO:
-    - emprego, vaga, candidatar, trabalhar, experiência, currículo, desempregado, oportunidade
-    
-    PALAVRAS-CHAVE PARA OUTROS ASSUNTOS:
-    - outros, outras dúvidas, outros assuntos, dúvidas, perguntas, informações, ajuda, consulta, esclarecimento
-    
-    Responda apenas com "company", "candidate" ou "other".
-    `;
-
+  async handleConversation(message, conversationHistory = []) {
     try {
-      const response = await this.groq.chat.completions.create({
-        messages: [{ role: 'user', content: prompt }],
-        model: this.model,
-        temperature: 0.1,
-        max_tokens: 10,
-      });
-
-      const classification = response.choices[0]?.message?.content?.toLowerCase().trim();
-      console.log(`🔍 Classificação: "${message}" -> ${classification}`);
+      console.log('🤖 Processando mensagem de forma inteligente:', message);
       
-      if (classification === 'company') return 'company';
-      if (classification === 'other') return 'other';
-      return 'candidate'; // Default
-    } catch (error) {
-      console.error('Erro na classificação:', error);
-      return 'candidate'; // Default
-    }
-  }
-
-  async extractCandidateInfo(message) {
-    const prompt = `
-    Extraia informações profissionais da seguinte mensagem de forma inteligente:
-    
-    MENSAGEM: "${message}"
-    
-    IMPORTANTE: Responda APENAS com um JSON válido, sem texto adicional.
-    
-    Retorne um JSON com as seguintes informações (se mencionadas):
-    {
-      "name": "nome da pessoa",
-      "experience": "anos de experiência ou nível (júnior, pleno, sênior)",
-      "skills": "habilidades mencionadas (separadas por vírgula)",
-      "location": "localização ou cidade",
-      "current_position": "cargo atual",
-      "desired_salary": "pretensão salarial",
-      "interests": "áreas de interesse ou preferências mencionadas"
-    }
-    
-    Se alguma informação não for mencionada, use null.
-    Seja inteligente na interpretação - por exemplo, se alguém diz "trabalho com vendas", extraia "vendas" como habilidade.
-    Se alguém diz "sou motorista", extraia "motorista" como habilidade e cargo atual.
-    `;
-
-    try {
-      const response = await this.groq.chat.completions.create({
-        messages: [{ role: 'user', content: prompt }],
-        model: this.model,
-        temperature: 0.1,
-        max_tokens: 200,
-      });
-
-      const content = response.choices[0]?.message?.content;
-      
-      // Tenta extrair JSON do conteúdo
-      let jsonContent = content;
-      
-      // Se o conteúdo não é JSON válido, tenta extrair
-      if (!content.trim().startsWith('{')) {
-        const jsonMatch = content.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          jsonContent = jsonMatch[0];
-        }
+      // Verifica se a mensagem está fora do escopo
+      if (this.isOutOfScope(message)) {
+        console.log('🚫 Mensagem detectada como fora do escopo:', message);
+        return this.getOutOfScopeResponse(message);
       }
       
-      const result = JSON.parse(jsonContent);
-      console.log('📋 Informações extraídas com sucesso:', result);
-      return result;
-    } catch (error) {
-      console.error('Erro na extração de informações:', error);
-      console.log('Conteúdo recebido:', response?.choices[0]?.message?.content);
-      
-      // Retorna objeto vazio em caso de erro
-      return {
-        name: null,
-        experience: null,
-        skills: null,
-        location: null,
-        current_position: null,
-        desired_salary: null,
-        interests: null
+      // Constrói o contexto da conversa
+      const context = {
+        userType: this.detectUserType(message, conversationHistory),
+        currentTime: new Date().toISOString(),
+        messageCount: conversationHistory.length
       };
+
+      // Prepara as mensagens para a IA
+      const messages = [];
+      
+      // Adiciona histórico da conversa
+      conversationHistory.forEach(msg => {
+        messages.push({
+          role: msg.sender === 'user' ? 'user' : 'assistant',
+          content: msg.message
+        });
+      });
+
+      // Adiciona a mensagem atual
+      messages.push({
+        role: 'user',
+        content: message
+      });
+
+      // Gera resposta contextual
+      const response = await this.generateResponse(messages, context);
+      
+      console.log('✅ Resposta gerada com sucesso');
+      return response;
+
+    } catch (error) {
+      console.error('❌ Erro no processamento inteligente:', error);
+      return this.getFallbackResponse(message);
+    }
+  }
+
+  detectUserType(message, conversationHistory) {
+    const messageLower = message.toLowerCase();
+    
+    // Se já foi determinado anteriormente, mantém
+    if (conversationHistory.length > 0) {
+      const lastMessage = conversationHistory[conversationHistory.length - 1];
+      if (lastMessage.userType) {
+        return lastMessage.userType;
+      }
+    }
+
+    // Detecta baseado na mensagem - melhorado para detectar empresas
+    if (messageLower.includes('empresa') || messageLower.includes('company') || 
+        messageLower.includes('contratar') || messageLower.includes('serviços') ||
+        messageLower.includes('rh') || messageLower.includes('recrutamento') ||
+        messageLower.includes('seleção') || messageLower.includes('funcionários') ||
+        messageLower.includes('colaboradores') || messageLower.includes('vagas para contratar') ||
+        messageLower.includes('preciso de funcionários') || messageLower.includes('quero contratar') ||
+        messageLower.includes('estou contratando') || messageLower.includes('preciso de colaboradores') ||
+        messageLower.includes('serviços de rh') || messageLower.includes('terceirização') ||
+        messageLower.includes('outsourcing') || messageLower.includes('gestão de pessoas')) {
+      return 'company';
+    } else if (messageLower.includes('candidato') || messageLower.includes('candidate') ||
+               messageLower.includes('emprego') || messageLower.includes('vaga') ||
+               messageLower.includes('trabalhar') || messageLower.includes('trabalho') ||
+               messageLower.includes('desempregado') || messageLower.includes('oportunidade') ||
+               messageLower.includes('procurando emprego') || messageLower.includes('quero trabalhar')) {
+      return 'candidate';
+    } else if (messageLower.includes('outros') || messageLower.includes('outras dúvidas') ||
+               messageLower.includes('outros assuntos') || messageLower.includes('dúvidas') ||
+               messageLower.includes('perguntas') || messageLower.includes('informações') ||
+               messageLower.includes('ajuda') || messageLower.includes('consulta') ||
+               messageLower.includes('esclarecimento')) {
+      return 'other';
+    }
+    
+    return 'unknown';
+  }
+
+  // Detecta se a mensagem está fora do escopo de RH
+  isOutOfScope(message) {
+    const messageLower = message.toLowerCase();
+    
+    // Palavras-chave que indicam solicitações fora do escopo
+    const outOfScopeKeywords = [
+      // Programação e tecnologia
+      'código', 'programa', 'script', 'python', 'javascript', 'java', 'html', 'css',
+      'desenvolver', 'programar', 'criar código', 'executar', 'algoritmo', 'função',
+      'api', 'database', 'servidor', 'aplicação', 'app', 'software', 'sistema',
+      
+      // Outros assuntos técnicos
+      'matemática', 'física', 'química', 'biologia', 'história', 'geografia',
+      'política', 'economia', 'finanças', 'investimentos', 'criptomoedas',
+      
+      // Assuntos pessoais ou confidenciais
+      'senha', 'cpf', 'rg', 'cartão', 'banco', 'conta bancária', 'dados pessoais',
+      'informações confidenciais', 'segredos', 'privacidade',
+      
+      // Assuntos não relacionados a RH
+      'receita', 'culinária', 'música', 'filmes', 'esportes', 'viagens', 'turismo',
+      'saúde', 'medicina', 'direito', 'advocacia', 'engenharia', 'arquitetura'
+    ];
+    
+    return outOfScopeKeywords.some(keyword => messageLower.includes(keyword));
+  }
+
+  // Resposta padrão para solicitações fora do escopo
+  getOutOfScopeResponse(message) {
+    return `Olá! 👋
+
+Desculpe, mas sou um assistente virtual especializado APENAS em recrutamento e seleção da Evolux Soluções de RH.
+
+🎯 Posso ajudá-lo com:
+• Busca de vagas de emprego
+• Informações sobre candidaturas
+• Serviços de RH para empresas
+• Orientação profissional
+
+❌ Não posso ajudá-lo com:
+• Programação ou códigos
+• Assuntos técnicos fora de RH
+• Informações pessoais ou confidenciais
+• Outros assuntos não relacionados a recrutamento
+
+Se você está procurando oportunidades de emprego ou serviços de RH, ficarei feliz em ajudá-lo! 
+
+Como posso auxiliá-lo com recrutamento e seleção? 😊`;
+  }
+
+  // Função para criar notificação de empresa
+  async createCompanyNotification(phoneNumber, message) {
+    try {
+      // Aqui você pode integrar com o sistema de notificações
+      // Por enquanto, vamos apenas logar
+      console.log(`🔔 NOTIFICAÇÃO DE EMPRESA: ${phoneNumber} - "${message}"`);
+      
+      // Se você tiver acesso ao database, pode criar a notificação diretamente
+      // await this.database.createNotification('company', phoneNumber, '🏢 Nova Empresa Interessada', message);
+      
+      return true;
+    } catch (error) {
+      console.error('Erro ao criar notificação de empresa:', error);
+      return false;
+    }
+  }
+
+  getFallbackResponse(message) {
+    // Verifica se a mensagem está fora do escopo
+    if (this.isOutOfScope(message)) {
+      return this.getOutOfScopeResponse(message);
+    }
+    
+    const messageLower = message.toLowerCase();
+    
+    if (messageLower.includes('empresa') || messageLower.includes('contratar')) {
+      return this.handleCompanyFlow(message);
+    } else if (messageLower.includes('candidato') || messageLower.includes('emprego')) {
+      return this.handleCandidateFlow(message);
+    } else {
+      return this.handleOtherFlow(message);
     }
   }
 
   async handleCompanyFlow(message) {
-    // Verifica se está no horário comercial
     if (!this.businessHoursService.isBusinessHours()) {
-      console.log('🏢 Empresa contactou fora do horário comercial');
       return this.businessHoursService.getOutOfHoursMessage();
     }
 
-    // Se está no horário comercial, pede para aguardar atendente
-    console.log('🏢 Empresa contactou no horário comercial - transferindo para humano');
-    return `Olá! 👋
+    return `Olá! ��
 
-Obrigado pelo seu contato com a ${config.company.name}! 
+Obrigado pelo seu interesse nos serviços da ${config.company.name}! 
 
 📞 Um de nossos especialistas em recrutamento e seleção irá atendê-lo em breve.
 
@@ -219,13 +301,14 @@ Obrigado pelo seu contato com a ${config.company.name}!
 
 Enquanto isso, você pode conhecer mais sobre nossos serviços em: ${config.company.website}
 
-Obrigado pela paciência! 🙏`;
+Obrigado pela paciência! 🙏
+
+---
+*Um especialista entrará em contato em breve para discutir suas necessidades de RH.*`;
   }
 
-  async handleCandidateFlow(message, conversationHistory = []) {
-    // Se é a primeira mensagem do candidato ou ainda não forneceu informações
-    if (conversationHistory.length <= 1) {
-      return `Olá! 👋
+  async handleCandidateFlow(message) {
+    return `Olá! 👋
 
 Sou o assistente virtual da ${config.company.name} e vou te ajudar a encontrar as melhores oportunidades!
 
@@ -241,102 +324,12 @@ Sou o assistente virtual da ${config.company.name} e vou te ajudar a encontrar a
 Exemplo: "Me chamo João, tenho 3 anos de experiência como desenvolvedor, trabalho com JavaScript, React e Node.js, moro em São Paulo e sou desenvolvedor pleno."
 
 Vamos começar? 😊`;
-    }
-
-    // Analisa o contexto da mensagem para entender a intenção
-    const messageLower = message.toLowerCase();
-    const isNegativeResponse = this.isNegativeResponse(messageLower);
-    const isAskingForMore = this.isAskingForMore(messageLower);
-    const isAskingForDifferent = this.isAskingForDifferent(messageLower);
-    const wantsToTalkToAttendant = this.wantsToTalkToAttendant(messageLower);
-
-    // Se é uma resposta negativa sobre as vagas mostradas
-    if (isNegativeResponse) {
-      return `Entendo! 😊
-
-Não se preocupe, posso te ajudar a encontrar outras opções.
-
-🤔 Me conte um pouco mais sobre o que você está procurando:
-• Que tipo de trabalho você gostaria?
-• Tem alguma preferência de localização?
-• Qual sua experiência profissional?
-• Que habilidades você tem?
-
-Assim posso te mostrar vagas mais adequadas ao seu perfil! 🎯`;
-    }
-
-    // Se está pedindo mais vagas ou opções diferentes
-    if (isAskingForMore || isAskingForDifferent) {
-      return `Claro! 😊
-
-Vou buscar mais opções para você.
-
-🔍 Pode me dar mais detalhes sobre:
-• Que tipo de trabalho você prefere?
-• Qual sua experiência?
-• Onde você gostaria de trabalhar?
-• Que habilidades você tem?
-
-Assim posso encontrar vagas que realmente combinem com você! 🎯`;
-    }
-
-    // Se quer falar com atendente
-    if (wantsToTalkToAttendant) {
-      return `Olá! 👋
-
-Obrigado por entrar em contato com a ${config.company.name}!
-
-📞 Um de nossos especialistas em recrutamento e seleção irá atendê-lo em breve.
-
-⏰ Por favor, aguarde um momento enquanto transferimos você para um atendente humano.
-
-Enquanto isso, você pode conhecer mais sobre nossos serviços em: ${config.company.website}
-
-Obrigado pela paciência! 🙏`;
-    }
-
-    // Extrai informações do candidato
-    const candidateInfo = await this.extractCandidateInfo(message);
-    console.log('📋 Informações extraídas do candidato:', candidateInfo);
-    
-    // Busca vagas que correspondam ao perfil
-    const matchingJobs = this.jobService.findMatchingJobs(candidateInfo, message);
-    console.log(`🎯 Encontradas ${matchingJobs.length} vagas para o perfil`);
-    
-    // Formata a resposta com as vagas encontradas
-    const jobsMessage = this.jobService.formatJobsList(matchingJobs);
-    
-    // Adiciona uma mensagem personalizada baseada no perfil
-    let personalizedMessage = '';
-    if (candidateInfo.name) {
-      personalizedMessage = `\n\nOlá ${candidateInfo.name}! 😊 `;
-    } else {
-      personalizedMessage = '\n\nPerfeito! ';
-    }
-    
-    if (matchingJobs.length > 0) {
-      const topJob = matchingJobs[0];
-      if (topJob.score > 0.7) {
-        personalizedMessage += `Encontrei algumas vagas que combinam muito com seu perfil! A vaga de ${topJob.nome_vaga} parece ser especialmente adequada para você. `;
-      } else {
-        personalizedMessage += `Encontrei algumas oportunidades interessantes! `;
-      }
-    } else {
-      personalizedMessage += `Vou continuar buscando oportunidades que combinem com seu perfil. `;
-    }
-    
-    personalizedMessage += `\n\n💡 Se essas vagas não forem exatamente o que você está procurando, me conte mais sobre suas preferências e posso buscar outras opções!\n\n📝 Para se candidatar, acesse: ${config.company.registrationLink}`;
-    
-    return jobsMessage + personalizedMessage;
   }
 
-  async handleOtherFlow(message, conversationHistory = []) {
-    // Para outros assuntos, funciona como empresas - transfere para atendente humano
-    console.log('❓ Outros assuntos - transferindo para atendente humano');
-    
+  async handleOtherFlow(message) {
     return `Olá! 👋
 
-Obrigado pelo seu contato com a ${config.company.name}! 
+Obrigado por entrar em contato com a ${config.company.name}!
 
 📞 Um de nossos especialistas irá atendê-lo em breve.
 
@@ -344,7 +337,85 @@ Obrigado pelo seu contato com a ${config.company.name}!
 
 Enquanto isso, você pode conhecer mais sobre nossos serviços em: ${config.company.website}
 
-Obrigado pela paciência! 🙏`;
+Obrigado pela paciência! 🙏
+
+---
+*Um atendente humano entrará em contato em breve.*`;
+  }
+
+  async getInitialMessage() {
+    return `Olá! 👋 Bem-vindo à ${config.company.name}!
+
+Sou o assistente virtual da Evolux Soluções de RH e estou aqui para ajudá-lo!
+
+🤔 Como posso ajudá-lo hoje?
+
+*Digite "empresa" se você representa uma empresa interessada em nossos serviços de RH*
+
+*Digite "candidato" se você está procurando oportunidades de emprego*
+
+*Digite "outros" se você tem outras dúvidas ou assuntos para conversar*
+
+Escolha uma das opções acima e eu direcionarei você da melhor forma! 😊`;
+  }
+
+  // Métodos de compatibilidade para manter funcionamento existente
+  async classifyUserType(message) {
+    return this.detectUserType(message, []);
+  }
+
+  async extractCandidateInfo(message) {
+    // Implementação simplificada para compatibilidade
+    return {
+      name: null,
+      experience: null,
+      skills: null,
+      location: null,
+      current_position: null,
+      desired_salary: null,
+      interests: null
+    };
+  }
+
+  wantsToEndConversation(message) {
+    const messageLower = message.toLowerCase().trim();
+    
+    // Palavras-chave específicas para finalização
+    const endKeywords = [
+      'encerrar', 'finalizar', 'terminar', 'acabar', 'fim', 'sair',
+      'tchau', 'adeus', 'até logo', 'até mais', 'obrigado', 'obrigada',
+      'valeu', 'ok', 'okay', 'beleza', 'blz', 'entendi', 'compreendi',
+      'perfeito', 'ótimo', 'excelente', 'muito bem', 'tudo bem', 'td bem',
+      'tudo certo', 'certo', 'claro', 'entendido', 'combinado'
+    ];
+    
+    // Verifica se a mensagem é EXATAMENTE uma dessas palavras
+    // ou se contém múltiplas palavras de finalização
+    const words = messageLower.split(' ').filter(word => word.length > 0);
+    
+    // Se é uma palavra única, verifica se é uma palavra de finalização
+    if (words.length === 1) {
+      return endKeywords.includes(words[0]);
+    }
+    
+    // Se tem múltiplas palavras, verifica se contém pelo menos 2 palavras de finalização
+    const endWordsFound = words.filter(word => endKeywords.includes(word));
+    return endWordsFound.length >= 2;
+  }
+
+  wantsToTalkToAttendant(message) {
+    const messageLower = message.toLowerCase();
+    const attendantKeywords = [
+      'quero conversar com uma atendente', 'quero falar com uma atendente',
+      'preciso conversar com uma atendente', 'preciso falar com uma atendente',
+      'quero falar com alguém', 'quero conversar com alguém',
+      'preciso falar com alguém', 'preciso conversar com alguém',
+      'atendimento humano', 'atendimento pessoal', 'falar com uma pessoa',
+      'conversar com uma pessoa', 'atendimento direto', 'falar diretamente',
+      'conversar diretamente'
+    ];
+    
+    return attendantKeywords.some(keyword => messageLower.includes(keyword));
   }
 
   async handleAttendantRequest(message) {
@@ -358,7 +429,10 @@ Obrigado por entrar em contato com a ${config.company.name}!
 
 Enquanto isso, você pode conhecer mais sobre nossos serviços em: ${config.company.website}
 
-Obrigado pela paciência! 🙏`;
+Obrigado pela paciência! 🙏
+
+---
+*Um atendente humano entrará em contato em breve.*`;
   }
 
   async handleEndConversation(message) {
@@ -378,125 +452,6 @@ Tenha um excelente dia! 😊
 
 ---
 *Atendimento finalizado pelo usuário em ${new Date().toLocaleString('pt-BR')}*`;
-  }
-
-  // Verifica se é uma resposta negativa
-  isNegativeResponse(message) {
-    const negativeKeywords = [
-      'não quero', 'não gosto', 'não me interessa', 'não serve', 'não combina',
-      'não é isso', 'não é o que procuro', 'não é adequado', 'não é ideal',
-      'não atende', 'não satisfaz', 'não é o que preciso', 'não é o que busco'
-    ];
-    return negativeKeywords.some(keyword => message.includes(keyword));
-  }
-
-  // Verifica se está pedindo mais vagas
-  isAskingForMore(message) {
-    const moreKeywords = [
-      'mais vagas', 'outras vagas', 'mais opções', 'outras opções', 'mais oportunidades',
-      'tem mais', 'tem outras', 'mostre mais', 'outras possibilidades', 'mais alternativas'
-    ];
-    return moreKeywords.some(keyword => message.includes(keyword));
-  }
-
-  // Verifica se está pedindo vagas diferentes
-  isAskingForDifferent(message) {
-    const differentKeywords = [
-      'diferente', 'outro tipo', 'outra área', 'outro setor', 'outro ramo',
-      'algo diferente', 'outro tipo de trabalho', 'outra área de atuação'
-    ];
-    return differentKeywords.some(keyword => message.includes(keyword));
-  }
-
-  // Verifica se quer falar com atendente
-  wantsToTalkToAttendant(message) {
-    const messageLower = message.toLowerCase();
-    const attendantKeywords = [
-      'quero conversar com uma atendente',
-      'quero falar com uma atendente',
-      'preciso conversar com uma atendente',
-      'preciso falar com uma atendente',
-      'quero falar com alguém',
-      'quero conversar com alguém',
-      'preciso falar com alguém',
-      'preciso conversar com alguém',
-      'atendimento humano',
-      'atendimento pessoal',
-      'falar com uma pessoa',
-      'conversar com uma pessoa',
-      'atendimento direto',
-      'falar diretamente',
-      'conversar diretamente'
-    ];
-    
-    return attendantKeywords.some(keyword => messageLower.includes(keyword));
-  }
-
-  wantsToEndConversation(message) {
-    const messageLower = message.toLowerCase();
-    const endKeywords = [
-      'encerrar',
-      'finalizar',
-      'terminar',
-      'acabar',
-      'fim',
-      'sair',
-      'sair do chat',
-      'sair da conversa',
-      'sair do atendimento',
-      'encerrar chat',
-      'encerrar conversa',
-      'encerrar atendimento',
-      'finalizar chat',
-      'finalizar conversa',
-      'finalizar atendimento',
-      'terminar chat',
-      'terminar conversa',
-      'terminar atendimento',
-      'tchau',
-      'adeus',
-      'até logo',
-      'até mais',
-      'obrigado',
-      'obrigada',
-      'valeu',
-      'ok',
-      'okay',
-      'beleza',
-      'blz',
-      'entendi',
-      'compreendi',
-      'perfeito',
-      'ótimo',
-      'excelente',
-      'muito bem',
-      'tudo bem',
-      'td bem',
-      'tudo certo',
-      'certo',
-      'sim',
-      'claro',
-      'entendido',
-      'combinado'
-    ];
-    
-    return endKeywords.some(keyword => messageLower.includes(keyword));
-  }
-
-  async getInitialMessage() {
-    return `Olá! 👋 Bem-vindo à ${config.company.name}!
-
-Sou o assistente virtual da Evolux Soluções de RH e estou aqui para ajudá-lo!
-
-🤔 Como posso ajudá-lo hoje?
-
-*Digite "empresa" se você representa uma empresa interessada em nossos serviços de RH*
-
-*Digite "candidato" se você está procurando oportunidades de emprego*
-
-*Digite "outros" se você tem outras dúvidas ou assuntos para conversar*
-
-Escolha uma das opções acima e eu direcionarei você da melhor forma! 😊`;
   }
 }
 

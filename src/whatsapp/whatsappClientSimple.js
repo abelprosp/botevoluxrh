@@ -432,7 +432,7 @@ Obrigado por escolher a ${config.company.name}! 🙏
       await this.saveUserMessage(phoneNumber, messageText);
 
       // Processa a mensagem e gera resposta
-      const response = await this.processMessage(phoneNumber, messageText, isRestarted);
+      const response = await this.processMessage(phoneNumber, messageText);
 
       // Se a resposta for null, significa que a conversa foi encerrada
       if (response === null) {
@@ -452,22 +452,23 @@ Obrigado por escolher a ${config.company.name}! 🙏
     }
   }
 
-  async processMessage(phoneNumber, messageText, isRestarted = false) {
+  async processMessage(phoneNumber, messageText) {
     try {
-      console.log(`🔍 PROCESSANDO MENSAGEM: "${messageText}" de ${phoneNumber}`);
-      
-      // Se é uma conversa reiniciada, sempre envia mensagem inicial
-      if (isRestarted) {
-        console.log(`🔄 Conversa reiniciada - enviando mensagem inicial`);
-        return await this.groqClient.getInitialMessage();
+      console.log(`📱 Processando mensagem de ${phoneNumber}: "${messageText}"`);
+
+      // Salva a mensagem do usuário
+      await this.saveUserMessage(phoneNumber, messageText);
+
+      // Obtém ou cria a conversa
+      let conversation = await this.database.getConversation(phoneNumber);
+      if (!conversation) {
+        const conversationId = await this.database.createConversation(phoneNumber, 'unknown');
+        conversation = { id: conversationId, user_type: 'unknown' };
       }
 
-      // Obtém ou cria conversa
-      let conversation = await this.database.getConversation(phoneNumber);
-      console.log(`📋 Conversa encontrada:`, conversation);
-      
-      if (!conversation) {
-        // Se é a primeira mensagem, envia mensagem inicial
+      // Se é a primeira mensagem, envia mensagem inicial
+      const conversationHistory = await this.database.getConversationHistory(conversation.id, 10);
+      if (conversationHistory.length === 0) {
         console.log(`🆕 Primeira mensagem - enviando mensagem inicial`);
         return await this.groqClient.getInitialMessage();
       }
@@ -475,210 +476,81 @@ Obrigado por escolher a ${config.company.name}! 🙏
       // Obtém histórico da conversa
       const history = await this.database.getConversationHistory(conversation.id, 10);
       console.log(`📜 Histórico da conversa: ${history.length} mensagens`);
-      
-      // Verifica se a mensagem é uma resposta direta à pergunta inicial
-      const messageLower = messageText.toLowerCase();
-      console.log(`🔍 Verificando palavras-chave na mensagem: "${messageLower}"`);
-      
-      if (messageLower.includes('candidato') || messageLower.includes('candidate')) {
-        console.log(`📱 Usuário ${phoneNumber} respondeu: candidato`);
-        await this.database.updateConversationUserType(conversation.id, 'candidate');
-        conversation.user_type = 'candidate';
-        return await this.groqClient.handleCandidateFlow(messageText, history);
-      } else if (messageLower.includes('empresa') || messageLower.includes('company')) {
-        console.log(`📱 Usuário ${phoneNumber} respondeu: empresa`);
+
+      // Verifica se quer encerrar a conversa (mas não se for candidato no meio do fluxo)
+      if (this.groqClient.wantsToEndConversation(messageText)) {
+        // Se é candidato e tem histórico de conversa, não finaliza automaticamente
+        if (conversation.user_type === 'candidate' && history.length > 2) {
+          console.log(`🤔 Candidato ${phoneNumber} disse algo que pode ser finalização, mas está no meio do fluxo - continuando conversa`);
+        } else {
+          console.log(`👋 Usuário ${phoneNumber} quer encerrar a conversa`);
+          
+          const endMessage = await this.groqClient.handleEndConversation(messageText);
+          await this.sendMessage(phoneNumber, endMessage);
+          await this.finalizeConversation(phoneNumber);
+          return null;
+        }
+      }
+
+      // Verifica se quer falar com atendente
+      if (this.groqClient.wantsToTalkToAttendant(messageText)) {
+        console.log(`👤 Usuário ${phoneNumber} quer falar com atendente`);
+        
+        // Cria notificação para atendimento manual
+        try {
+          await this.database.createNotification(
+            'candidate',
+            phoneNumber,
+            '👤 Usuário Quer Atendente',
+            `Usuário ${phoneNumber} solicitou atendimento humano: "${messageText}"`
+          );
+          console.log(`🔔 Notificação de atendente criada: ${phoneNumber}`);
+        } catch (error) {
+          console.error('Erro ao criar notificação de atendente:', error);
+        }
+        
+        return await this.groqClient.handleAttendantRequest(messageText);
+      }
+
+      // Verifica se a mensagem está fora do escopo de RH
+      if (this.groqClient.isOutOfScope(messageText)) {
+        console.log(`🚫 Mensagem fora do escopo detectada: ${phoneNumber} - "${messageText}"`);
+        return this.groqClient.getOutOfScopeResponse(messageText);
+      }
+
+      // Detecta se é uma empresa querendo contratar a Evolux
+      const userType = this.groqClient.detectUserType(messageText, history);
+      if (userType === 'company' && (!conversation.user_type || conversation.user_type === 'unknown')) {
+        console.log(`🏢 Empresa detectada: ${phoneNumber} - "${messageText}"`);
+        
+        // Atualiza o tipo de usuário no banco
         await this.database.updateConversationUserType(conversation.id, 'company');
         conversation.user_type = 'company';
         
-        // Criar notificação para empresa
+        // Cria notificação para empresa no dashboard
         try {
           await this.database.createNotification(
             'company',
             phoneNumber,
             '🏢 Nova Empresa Interessada',
-            `Empresa ${phoneNumber} entrou em contato para contratar serviços da Evolux`
+            `Empresa ${phoneNumber} entrou em contato para contratar serviços da Evolux: "${messageText}"`
           );
-          console.log(`🔔 Notificação criada para empresa ${phoneNumber}`);
+          console.log(`🔔 Notificação de empresa criada no dashboard: ${phoneNumber}`);
         } catch (error) {
-          console.error('Erro ao criar notificação:', error);
-        }
-        
-        return await this.groqClient.handleCompanyFlow(messageText);
-      } else if (messageLower.includes('outros') || messageLower.includes('outras dúvidas') || messageLower.includes('outros assuntos')) {
-        console.log(`📱 Usuário ${phoneNumber} respondeu: outros assuntos`);
-        await this.database.updateConversationUserType(conversation.id, 'other');
-        conversation.user_type = 'other';
-        
-        // Criar notificação para outros assuntos
-        try {
-          await this.database.createNotification(
-            'other',
-            phoneNumber,
-            '❓ Outros Assuntos',
-            `Usuário ${phoneNumber} solicitou informações sobre outros assuntos: "${messageText}"`
-          );
-          console.log(`🔔 Notificação de outros assuntos criada: ${phoneNumber}`);
-        } catch (error) {
-          console.error('Erro ao criar notificação de outros assuntos:', error);
-        }
-        
-        return await this.groqClient.handleOtherFlow(messageText, history);
-      }
-      
-      console.log(`📋 Tipo de usuário atual: ${conversation.user_type}`);
-      
-      // Se ainda não foi classificado o tipo de usuário
-      if (!conversation.user_type || conversation.user_type === 'unknown') {
-        console.log(`🤖 Classificando tipo de usuário automaticamente`);
-        const userType = await this.groqClient.classifyUserType(messageText);
-        console.log(`📱 Usuário ${phoneNumber} classificado como: ${userType}`);
-        await this.database.updateConversationUserType(conversation.id, userType);
-        conversation.user_type = userType;
-        
-        // Processa a primeira resposta baseada na classificação
-        if (userType === 'company') {
-          // Criar notificação para empresa
-          try {
-            await this.database.createNotification(
-              'company',
-              phoneNumber,
-              '🏢 Nova Empresa Interessada',
-              `Empresa ${phoneNumber} entrou em contato para contratar serviços da Evolux`
-            );
-            console.log(`🔔 Notificação criada para empresa ${phoneNumber}`);
-          } catch (error) {
-            console.error('Erro ao criar notificação:', error);
-          }
-          
-          return await this.groqClient.handleCompanyFlow(messageText);
-        } else if (userType === 'candidate') {
-          return await this.groqClient.handleCandidateFlow(messageText, history);
-        } else if (userType === 'other') {
-          // Criar notificação para outros assuntos
-          try {
-            await this.database.createNotification(
-              'other',
-              phoneNumber,
-              '❓ Outros Assuntos',
-              `Usuário ${phoneNumber} solicitou informações sobre outros assuntos: "${messageText}"`
-            );
-            console.log(`🔔 Notificação de outros assuntos criada: ${phoneNumber}`);
-          } catch (error) {
-            console.error('Erro ao criar notificação de outros assuntos:', error);
-          }
-          
-          return await this.groqClient.handleOtherFlow(messageText, history);
+          console.error('Erro ao criar notificação de empresa:', error);
         }
       }
 
-      // Se já foi classificado, processa normalmente
-      if (conversation.user_type === 'company') {
-        // Registra a mensagem da empresa
-        try {
-          const businessHours = this.businessHoursService.isBusinessHours() ? 'within' : 'outside';
-          await this.database.createCompanyMessage(
-            phoneNumber, 
-            messageText, 
-            null, // companyName será extraído depois se necessário
-            'initial',
-            businessHours
-          );
-          console.log(`📝 Mensagem da empresa registrada: ${phoneNumber}`);
-        } catch (error) {
-          console.error('Erro ao registrar mensagem da empresa:', error);
-        }
-        
-        // Verifica se a empresa quer encerrar a conversa
-        console.log(`🔍 Verificando se empresa ${phoneNumber} quer encerrar: "${messageText}"`);
-        if (this.groqClient.wantsToEndConversation(messageText)) {
-          console.log(`🏢 Empresa ${phoneNumber} quer encerrar a conversa`);
-          
-          // Envia mensagem de encerramento
-          const endMessage = await this.groqClient.handleEndConversation(messageText);
-          await this.sendMessage(phoneNumber, endMessage);
-          
-          // Finaliza a conversa
-          await this.finalizeConversation(phoneNumber);
-          
-          return null; // Não envia resposta adicional
-        }
-        
-        return await this.groqClient.handleCompanyFlow(messageText);
-      } else if (conversation.user_type === 'candidate') {
-        // Verifica se o candidato quer falar com um atendente
-        if (this.groqClient.wantsToTalkToAttendant(messageText)) {
-          console.log(`👤 Candidato ${phoneNumber} quer falar com atendente`);
-          
-          // Cria notificação para atendimento manual
-          try {
-            await this.database.createNotification(
-              'candidate',
-              phoneNumber,
-              '👤 Candidato Quer Atendente',
-              `Candidato ${phoneNumber} solicitou atendimento humano: "${messageText}"`
-            );
-            console.log(`🔔 Notificação de candidato criada: ${phoneNumber}`);
-          } catch (error) {
-            console.error('Erro ao criar notificação de candidato:', error);
-          }
-          
-          // Retorna mensagem de transferência
-          return await this.groqClient.handleAttendantRequest(messageText);
-        }
-        
-        // Verifica se o candidato quer encerrar a conversa
-        console.log(`🔍 Verificando se candidato ${phoneNumber} quer encerrar: "${messageText}"`);
-        if (this.groqClient.wantsToEndConversation(messageText)) {
-          console.log(`👤 Candidato ${phoneNumber} quer encerrar a conversa`);
-          
-          // Envia mensagem de encerramento
-          const endMessage = await this.groqClient.handleEndConversation(messageText);
-          await this.sendMessage(phoneNumber, endMessage);
-          
-          // Finaliza a conversa
-          await this.finalizeConversation(phoneNumber);
-          
-          return null; // Não envia resposta adicional
-        }
-        
-        return await this.groqClient.handleCandidateFlow(messageText, history);
-      } else if (conversation.user_type === 'other') {
-        // Cria notificação para outros assuntos
-        try {
-          await this.database.createNotification(
-            'other',
-            phoneNumber,
-            '❓ Outros Assuntos',
-            `Usuário solicitou informações sobre outros assuntos: "${messageText}"`
-          );
-          console.log(`📝 Notificação de outros assuntos criada: ${phoneNumber}`);
-        } catch (error) {
-          console.error('Erro ao criar notificação de outros assuntos:', error);
-        }
-        
-        // Verifica se quer encerrar a conversa
-        console.log(`🔍 Verificando se usuário ${phoneNumber} quer encerrar (outros): "${messageText}"`);
-        if (this.groqClient.wantsToEndConversation(messageText)) {
-          console.log(`❓ Usuário ${phoneNumber} quer encerrar a conversa (outros assuntos)`);
-          
-          // Envia mensagem de encerramento
-          const endMessage = await this.groqClient.handleEndConversation(messageText);
-          await this.sendMessage(phoneNumber, endMessage);
-          
-          // Finaliza a conversa
-          await this.finalizeConversation(phoneNumber);
-          
-          return null; // Não envia resposta adicional
-        }
-        
-        return await this.groqClient.handleOtherFlow(messageText, history);
-      } else {
-        // Se não conseguiu classificar, pergunta novamente
-        return await this.groqClient.getInitialMessage();
-      }
+      // Processa a mensagem de forma inteligente e contextual
+      const response = await this.groqClient.handleConversation(messageText, history);
+      
+      // Salva a resposta do agente
+      await this.saveAgentMessage(phoneNumber, response);
+
+      return response;
 
     } catch (error) {
-      console.error('Erro no processamento da mensagem:', error);
+      console.error('❌ Erro no processamento da mensagem:', error);
       return 'Desculpe, estou enfrentando dificuldades técnicas. Tente novamente em alguns instantes.';
     }
   }

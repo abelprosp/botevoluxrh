@@ -1,93 +1,207 @@
-const fs = require('fs');
-const path = require('path');
-const csv = require('csv-parser');
+const { createClient } = require('@supabase/supabase-js');
+const config = require('../config/config');
 
 class JobService {
   constructor() {
+    this.supabase = createClient(config.supabase.url, config.supabase.key);
     this.jobs = [];
-    this.csvPath = path.join(__dirname, '../data/jobs.csv');
-    this.loadJobs();
+    this.lastFetch = null;
+    this.cacheDuration = 5 * 60 * 1000; // 5 minutos
   }
 
-  loadJobs() {
+  async loadJobs() {
     try {
-      const results = [];
-      fs.createReadStream(this.csvPath)
-        .pipe(csv())
-        .on('data', (data) => results.push(data))
-        .on('end', () => {
-          this.jobs = results;
-          console.log(`✅ ${this.jobs.length} vagas carregadas do CSV`);
-        });
+      console.log('🔄 Carregando vagas do Supabase...');
+      
+      const { data, error } = await this.supabase
+        .from('jobs')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('❌ Erro ao carregar vagas do Supabase:', error);
+        return [];
+      }
+
+      this.jobs = data || [];
+      this.lastFetch = Date.now();
+      
+      console.log(`✅ ${this.jobs.length} vagas carregadas do Supabase`);
+      return this.jobs;
     } catch (error) {
-      console.error('❌ Erro ao carregar vagas do CSV:', error);
-      this.jobs = [];
+      console.error('❌ Erro ao conectar com Supabase:', error);
+      return [];
     }
   }
 
-  getAllJobs() {
+  async getAllJobs() {
+    // Verifica se precisa atualizar o cache
+    if (!this.lastFetch || (Date.now() - this.lastFetch) > this.cacheDuration) {
+      await this.loadJobs();
+    }
     return this.jobs;
   }
 
   // Função melhorada para encontrar vagas que correspondem ao perfil do candidato
-  findMatchingJobs(candidateProfile, candidateMessage = '') {
-    if (!candidateProfile || Object.keys(candidateProfile).length === 0) {
-      return this.jobs.slice(0, 3); // Retorna as primeiras 3 vagas se não há perfil
+  async findMatchingJobs(candidateProfile, candidateMessage = '') {
+    try {
+      const jobs = await this.getAllJobs();
+      
+      if (!jobs || jobs.length === 0) {
+        console.log('⚠️ Nenhuma vaga encontrada no Supabase');
+        return [];
+      }
+
+      if (!candidateProfile || Object.keys(candidateProfile).length === 0) {
+        return jobs.slice(0, 3); // Retorna as primeiras 3 vagas se não há perfil
+      }
+
+      const scoredJobs = jobs.map(job => {
+        const score = this.calculateJobMatchScore(job, candidateProfile, candidateMessage);
+        return { ...job, score };
+      });
+
+      // Verifica se o candidato mencionou ser motorista
+      const isMotorista = this.isMotoristaCandidate(candidateProfile, candidateMessage);
+      
+      if (isMotorista) {
+        // Se é motorista, prioriza vagas de motorista
+        const motoristaJobs = scoredJobs.filter(job => 
+          job.title.toLowerCase().includes('motorista') || 
+          job.description.toLowerCase().includes('motorista') ||
+          job.description.toLowerCase().includes('cnh') ||
+          job.area.toLowerCase().includes('logística') ||
+          job.area.toLowerCase().includes('transporte')
+        );
+        
+        const otherJobs = scoredJobs.filter(job => 
+          !job.title.toLowerCase().includes('motorista') && 
+          !job.description.toLowerCase().includes('motorista') &&
+          !job.description.toLowerCase().includes('cnh') &&
+          !job.area.toLowerCase().includes('logística') &&
+          !job.area.toLowerCase().includes('transporte')
+        );
+
+        // Ordena vagas de motorista por score e depois adiciona outras vagas
+        const sortedMotoristaJobs = motoristaJobs
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3); // Máximo 3 vagas de motorista
+
+        const sortedOtherJobs = otherJobs
+          .filter(job => job.score > 0.3)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 2); // Máximo 2 outras vagas
+
+        const finalJobs = [...sortedMotoristaJobs, ...sortedOtherJobs];
+        
+        console.log(`🎯 Motorista detectado! Vagas encontradas:`, finalJobs.map(j => `${j.title}: ${(j.score * 100).toFixed(1)}%`));
+        
+        return finalJobs;
+      }
+
+      // Filtra vagas com score mínimo e ordena por relevância
+      const matchingJobs = scoredJobs
+        .filter(job => job.score > 0.3) // Score mínimo de 30%
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5); // Top 5 vagas
+
+      console.log(`🎯 Vagas encontradas com scores:`, matchingJobs.map(j => `${j.title}: ${(j.score * 100).toFixed(1)}%`));
+
+      // Se não encontrou vagas adequadas, sugere alternativas
+      if (matchingJobs.length === 0) {
+        return this.suggestAlternativeJobs(candidateProfile, candidateMessage);
+      }
+
+      return matchingJobs;
+    } catch (error) {
+      console.error('❌ Erro ao buscar vagas:', error);
+      return [];
+    }
+  }
+
+  // Calcula o score de compatibilidade entre vaga e candidato
+  calculateJobMatchScore(job, candidateProfile, candidateMessage = '') {
+    let score = 0;
+    const message = candidateMessage.toLowerCase();
+    const skills = (candidateProfile.skills || '').toLowerCase();
+    const position = (candidateProfile.current_position || '').toLowerCase();
+    const experience = (candidateProfile.experience || '').toLowerCase();
+    const location = (candidateProfile.location || '').toLowerCase();
+
+    // Score por nível (júnior, pleno, sênior)
+    if (job.level && experience) {
+      if (job.level.toLowerCase() === 'júnior' && (experience.includes('júnior') || experience.includes('iniciante') || experience.includes('estagiário'))) {
+        score += 0.3;
+      } else if (job.level.toLowerCase() === 'pleno' && (experience.includes('pleno') || experience.includes('intermediário'))) {
+        score += 0.3;
+      } else if (job.level.toLowerCase() === 'sênior' && (experience.includes('sênior') || experience.includes('experiente'))) {
+        score += 0.3;
+      }
     }
 
-    const scoredJobs = this.jobs.map(job => {
-      const score = this.calculateJobMatchScore(job, candidateProfile, candidateMessage);
-      return { ...job, score };
-    });
+    // Score por área
+    if (job.area && skills) {
+      const jobArea = job.area.toLowerCase();
+      if (skills.includes(jobArea) || message.includes(jobArea)) {
+        score += 0.2;
+      }
+    }
 
-    // Verifica se o candidato mencionou ser motorista
-    const isMotorista = this.isMotoristaCandidate(candidateProfile, candidateMessage);
+    // Score por localização
+    if (job.location && location) {
+      const jobLocation = job.location.toLowerCase();
+      if (location.includes(jobLocation) || jobLocation.includes(location)) {
+        score += 0.2;
+      }
+    }
+
+    // Score por título da vaga
+    if (job.title && position) {
+      const jobTitle = job.title.toLowerCase();
+      if (position.includes(jobTitle) || jobTitle.includes(position)) {
+        score += 0.3;
+      }
+    }
+
+    // Score por requisitos
+    if (job.requirements && Array.isArray(job.requirements)) {
+      const requirements = job.requirements.join(' ').toLowerCase();
+      if (skills && requirements.includes(skills)) {
+        score += 0.2;
+      }
+    }
+
+    // Score por descrição
+    if (job.description && (skills || position)) {
+      const description = job.description.toLowerCase();
+      if (skills && description.includes(skills)) {
+        score += 0.1;
+      }
+      if (position && description.includes(position)) {
+        score += 0.1;
+      }
+    }
+
+    return Math.min(score, 1.0); // Máximo score de 1.0
+  }
+
+  // Verifica se o candidato é motorista
+  isMotoristaCandidate(candidateProfile, candidateMessage = '') {
+    const message = candidateMessage.toLowerCase();
+    const skills = (candidateProfile.skills || '').toLowerCase();
+    const position = (candidateProfile.current_position || '').toLowerCase();
     
-    if (isMotorista) {
-      // Se é motorista, prioriza vagas de motorista
-      const motoristaJobs = scoredJobs.filter(job => 
-        job.nome_vaga.toLowerCase().includes('motorista') || 
-        job.descricao.toLowerCase().includes('motorista') ||
-        job.descricao.toLowerCase().includes('cnh')
-      );
-      
-      const otherJobs = scoredJobs.filter(job => 
-        !job.nome_vaga.toLowerCase().includes('motorista') && 
-        !job.descricao.toLowerCase().includes('motorista') &&
-        !job.descricao.toLowerCase().includes('cnh')
-      );
-
-      // Ordena vagas de motorista por score e depois adiciona outras vagas
-      const sortedMotoristaJobs = motoristaJobs
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 3); // Máximo 3 vagas de motorista
-
-      const sortedOtherJobs = otherJobs
-        .filter(job => job.score > 0.3)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 2); // Máximo 2 outras vagas
-
-      const finalJobs = [...sortedMotoristaJobs, ...sortedOtherJobs];
-      
-      console.log(`🎯 Motorista detectado! Vagas encontradas:`, finalJobs.map(j => `${j.nome_vaga}: ${(j.score * 100).toFixed(1)}%`));
-      
-      return finalJobs;
-    }
-
-    // Filtra vagas com score mínimo e ordena por relevância
-    const matchingJobs = scoredJobs
-      .filter(job => job.score > 0.3) // Score mínimo de 30%
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5); // Top 5 vagas
-
-    console.log(`🎯 Vagas encontradas com scores:`, matchingJobs.map(j => `${j.nome_vaga}: ${(j.score * 100).toFixed(1)}%`));
-
-    // Se não encontrou vagas adequadas, sugere alternativas
-    if (matchingJobs.length === 0) {
-      return this.suggestAlternativeJobs(candidateProfile, candidateMessage);
-    }
-
-    return matchingJobs;
+    const motoristaKeywords = [
+      'motorista', 'cnh', 'carteira', 'dirigir', 'caminhão', 'carro',
+      'entregas', 'logística', 'transporte', 'frete', 'delivery'
+    ];
+    
+    return motoristaKeywords.some(keyword => 
+      message.includes(keyword) || 
+      skills.includes(keyword) || 
+      position.includes(keyword)
+    );
   }
 
   // Sugere vagas alternativas quando não há matches perfeitos
@@ -98,386 +212,119 @@ class JobService {
     const skills = (candidateProfile.skills || '').toLowerCase();
     const position = (candidateProfile.current_position || '').toLowerCase();
     const experience = (candidateProfile.experience || '').toLowerCase();
-
-    // Mapeamento de profissões para vagas relacionadas
-    const professionAlternatives = {
-      'motorista': ['Auxiliar de Expedição', 'Assistente de Logística', 'Auxiliar de Produção/Expedição'],
-      'mecânico': ['Vendedor de Peças', 'Auxiliar de Produção/Expedição', 'Assistente de Logística'],
-      'vendedor': ['Assistente de Vendas', 'Atendimento ao Cliente', 'Consultor especialista B2B', 'Assistente Comercial'],
-      'administrativo': ['Estagiário Administrativo', 'Assistente de Logística', 'Secretária'],
-      'técnico': ['Técnico de Informática', 'Técnico em Segurança do Trabalho', 'Auxiliar de Produção/Expedição'],
-      'logística': ['Auxiliar de Expedição', 'Assistente de Logística', 'Auxiliar de Produção/Expedição'],
-      'segurança': ['Técnico em Segurança do Trabalho', 'Auxiliar de Produção/Expedição'],
-      'estagiário': ['Estagiário Administrativo', 'Auxiliar de Expedição', 'Auxiliar de Produção/Expedição']
-    };
-
-    // Busca por profissões relacionadas
-    let suggestedJobs = [];
     
-    for (const [profession, alternatives] of Object.entries(professionAlternatives)) {
-      if (message.includes(profession) || skills.includes(profession) || position.includes(profession) || experience.includes(profession)) {
-        suggestedJobs = this.jobs.filter(job => alternatives.includes(job.nome_vaga));
-        break;
+    // Busca vagas que tenham pelo menos uma palavra-chave em comum
+    const scoredJobs = this.jobs.map(job => {
+      let score = 0;
+      
+      // Score por área
+      if (job.area && (skills.includes(job.area.toLowerCase()) || message.includes(job.area.toLowerCase()))) {
+        score += 0.2;
       }
-    }
-
-    // Se não encontrou alternativas específicas, sugere vagas gerais
-    if (suggestedJobs.length === 0) {
-      suggestedJobs = this.jobs.filter(job => 
-        job.nome_vaga.includes('Assistente') || 
-        job.nome_vaga.includes('Auxiliar') ||
-        job.nome_vaga.includes('Estagiário')
-      );
-    }
-
-    // Adiciona scores e ordena
-    const scoredSuggestions = suggestedJobs.map(job => ({
-      ...job,
-      score: 0.4, // Score padrão para sugestões
-      isSuggestion: true
-    }));
-
-    console.log(`💡 Sugestões encontradas:`, scoredSuggestions.map(j => j.nome_vaga));
-    
-    return scoredSuggestions.slice(0, 3);
-  }
-
-  // Calcula score de compatibilidade entre vaga e candidato
-  calculateJobMatchScore(job, candidateProfile, candidateMessage = '') {
-    let score = 0;
-    const totalWeight = 100;
-
-    // Se não há perfil do candidato, usa apenas análise da mensagem
-    if (!candidateProfile || Object.keys(candidateProfile).length === 0) {
-      if (candidateMessage) {
-        const messageScore = this.analyzeMessageRelevance(candidateMessage, job);
-        score += messageScore * 100; // Usa 100% do peso na mensagem
+      
+      // Score por nível
+      if (job.level && experience.includes(job.level.toLowerCase())) {
+        score += 0.2;
       }
-      return score / totalWeight;
-    }
-
-    // 1. Senioridade (peso: 25)
-    if (candidateProfile.experience && job.senioridade) {
-      const seniorityScore = this.matchSeniority(candidateProfile.experience, job.senioridade);
-      score += seniorityScore * 25;
-    }
-
-    // 2. Localização (peso: 20)
-    if (candidateProfile.location && job.localizacao) {
-      const locationScore = this.matchLocation(candidateProfile.location, job.localizacao);
-      score += locationScore * 20;
-    }
-
-    // 3. Habilidades (peso: 35)
-    if (candidateProfile.skills && job.descricao) {
-      const skillsScore = this.matchSkills(candidateProfile.skills, job.descricao);
-      score += skillsScore * 35;
-    }
-
-    // 4. Análise semântica da mensagem (peso: 20)
-    if (candidateMessage) {
-      const messageScore = this.analyzeMessageRelevance(candidateMessage, job);
-      score += messageScore * 20;
-    }
-
-    // Garante que o score não seja NaN
-    if (isNaN(score)) {
-      score = 0;
-    }
-
-    return score / totalWeight; // Retorna score entre 0 e 1
-  }
-
-  // Compara senioridade do candidato com a vaga
-  matchSeniority(candidateExp, jobSeniority) {
-    const candidateLevel = this.extractSeniorityLevel(candidateExp);
-    const jobLevel = jobSeniority.toLowerCase();
-
-    // Mapeamento de níveis
-    const levels = {
-      'estágio': 1,
-      'júnior': 2,
-      'pleno': 3,
-      'sênior': 4
-    };
-
-    const candidateScore = levels[candidateLevel] || 2;
-    const jobScore = levels[jobLevel] || 2;
-
-    // Candidato pode se candidatar para nível igual ou um nível acima
-    if (candidateScore >= jobScore && candidateScore <= jobScore + 1) {
-      return 1.0; // Perfeito
-    } else if (candidateScore >= jobScore - 1 && candidateScore <= jobScore + 2) {
-      return 0.7; // Bom
-    } else {
-      return 0.3; // Baixo
-    }
-  }
-
-  // Extrai nível de senioridade da experiência
-  extractSeniorityLevel(experience) {
-    const exp = experience.toLowerCase();
-    
-    if (exp.includes('estágio') || exp.includes('estagiário')) return 'estágio';
-    if (exp.includes('júnior') || exp.includes('junior') || exp.includes('iniciante')) return 'júnior';
-    if (exp.includes('pleno') || exp.includes('intermediário')) return 'pleno';
-    if (exp.includes('sênior') || exp.includes('senior') || exp.includes('experiente')) return 'sênior';
-    
-    // Tenta extrair anos de experiência
-    const yearsMatch = exp.match(/(\d+)\s*(anos?|anos)/);
-    if (yearsMatch) {
-      const years = parseInt(yearsMatch[1]);
-      if (years <= 1) return 'júnior';
-      if (years <= 3) return 'pleno';
-      return 'sênior';
-    }
-
-    return 'pleno'; // Default
-  }
-
-  // Compara localização
-  matchLocation(candidateLocation, jobLocation) {
-    const candidate = candidateLocation.toLowerCase();
-    const job = jobLocation.toLowerCase();
-
-    // Se a vaga é remota, sempre compatível
-    if (job.includes('remoto') || job.includes('home office')) {
-      return 1.0;
-    }
-
-    // Busca por cidades específicas
-    const cities = ['lajeado', 'estrela', 'arroio do meio', 'venâncio aires'];
-    const candidateCity = cities.find(city => candidate.includes(city));
-    const jobCity = cities.find(city => job.includes(city));
-
-    if (candidateCity && jobCity) {
-      return candidateCity === jobCity ? 1.0 : 0.5; // Mesma cidade ou cidade próxima
-    }
-
-    // Se não encontrou cidade específica, assume compatibilidade média
-    return 0.6;
-  }
-
-  // Compara habilidades com melhor reconhecimento de sinônimos
-  matchSkills(candidateSkills, jobDescription) {
-    const skills = candidateSkills.toLowerCase().split(',').map(s => s.trim());
-    const description = jobDescription.toLowerCase();
-    
-    // Mapeamento de habilidades relacionadas
-    const skillSynonyms = {
-      'cnh': ['cnh', 'carteira de motorista', 'carteira nacional de habilitação', 'habilitação', 'habilitacao'],
-      'caminhão': ['caminhão', 'caminhao', 'truck', 'veículo pesado', 'veiculo pesado'],
-      'vendas': ['vendas', 'vender', 'comercial', 'atendimento', 'prospecção', 'prospecção de clientes'],
-      'excel': ['excel', 'planilhas', 'microsoft excel'],
-      'word': ['word', 'microsoft word', 'processador de texto'],
-      'javascript': ['javascript', 'js', 'node.js', 'nodejs'],
-      'react': ['react', 'react.js', 'reactjs'],
-      'node.js': ['node.js', 'nodejs', 'node'],
-      'administração': ['administração', 'administracao', 'administrativo', 'gestão', 'gestao'],
-      'logística': ['logística', 'logistica', 'expedição', 'expedicao', 'estoque'],
-      'mecânica': ['mecânica', 'mecanica', 'mecânico', 'mecanico', 'manutenção', 'manutencao'],
-      'segurança': ['segurança', 'seguranca', 'prevenção', 'prevencao'],
-      'atendimento': ['atendimento', 'atender', 'cliente', 'clientes', 'suporte'],
-      'carros': ['carros', 'automóveis', 'automoveis', 'veículos', 'veiculos', 'mecânica', 'mecanica'],
-      'motorista': ['motorista', 'dirigir', 'cnh', 'caminhão', 'caminhao', 'veículo', 'veiculo'],
-      'produção': ['produção', 'producao', 'produzir', 'fabricação', 'fabricacao'],
-      'expedição': ['expedição', 'expedicao', 'estoque', 'logística', 'logistica'],
-      'ti': ['ti', 'tecnologia da informação', 'informática', 'informatica', 'computador', 'sistema'],
-      'informática': ['informática', 'informatica', 'ti', 'computador', 'sistema', 'suporte']
-    };
-
-    let matchedSkills = 0;
-    const totalSkills = skills.length;
-
-    skills.forEach(skill => {
-      // Verifica match direto
-      if (description.includes(skill)) {
-        matchedSkills++;
-        return;
+      
+      // Score por título
+      if (job.title && (position.includes(job.title.toLowerCase()) || message.includes(job.title.toLowerCase()))) {
+        score += 0.2;
       }
-
-      // Verifica sinônimos
-      for (const [category, synonyms] of Object.entries(skillSynonyms)) {
-        if (skill.includes(category) || synonyms.some(syn => skill.includes(syn))) {
-          // Verifica se algum sinônimo está na descrição
-          if (synonyms.some(syn => description.includes(syn))) {
-            matchedSkills++;
-            return;
-          }
-        }
-      }
-
-      // Verifica palavras-chave relacionadas na descrição
-      const relatedKeywords = this.getRelatedKeywords(skill);
-      if (relatedKeywords.some(keyword => description.includes(keyword))) {
-        matchedSkills++;
-        return;
-      }
+      
+      return { ...job, score };
     });
-
-    return totalSkills > 0 ? matchedSkills / totalSkills : 0.5;
-  }
-
-  // Retorna palavras-chave relacionadas a uma habilidade
-  getRelatedKeywords(skill) {
-    const keywordMap = {
-      'motorista': ['dirigir', 'cnh', 'caminhão', 'caminhao', 'veículo', 'veiculo', 'transporte', 'entrega', 'coleta'],
-      'mecânico': ['manutenção', 'manutencao', 'reparo', 'carros', 'automóveis', 'automoveis', 'veículos', 'veiculos'],
-      'vendas': ['comercial', 'atendimento', 'cliente', 'clientes', 'prospecção', 'prospecção de clientes', 'negociação', 'negociacao'],
-      'administrativo': ['administração', 'administracao', 'gestão', 'gestao', 'organização', 'organizacao', 'controle'],
-      'ti': ['informática', 'informatica', 'computador', 'sistema', 'suporte', 'tecnologia', 'programação', 'programacao'],
-      'logística': ['expedição', 'expedicao', 'estoque', 'armazenagem', 'distribuição', 'distribuicao', 'transporte'],
-      'produção': ['fabricação', 'fabricacao', 'produzir', 'manufatura', 'operar', 'equipamentos'],
-      'segurança': ['prevenção', 'prevencao', 'proteção', 'protecao', 'riscos', 'acidentes', 'trabalho']
-    };
-
-    return keywordMap[skill] || [];
-  }
-
-  // Analisa relevância da mensagem do candidato com a vaga
-  analyzeMessageRelevance(candidateMessage, job) {
-    const message = candidateMessage.toLowerCase();
-    const jobTitle = job.nome_vaga.toLowerCase();
-    const jobDesc = job.descricao.toLowerCase();
-
-    let relevance = 0;
-
-    // Mapeamento de sinônimos e termos relacionados
-    const synonyms = {
-      'motorista': ['motorista', 'motorista de caminhão', 'motorista de carro', 'motorista de van', 'motorista de ônibus', 'motorista de entrega', 'motorista de coleta', 'cnh', 'cnh c', 'cnh d', 'cnh e'],
-      'mecânico': ['mecânico', 'mecanico', 'mecânica', 'mecanica', 'manutenção de veículos', 'manutencao de veiculos', 'reparo de veículos', 'reparo de veiculos'],
-      'vendedor': ['vendedor', 'vendedora', 'vendas', 'comercial', 'atendimento', 'prospecção', 'prospecção de clientes'],
-      'administrativo': ['administrativo', 'administração', 'administracao', 'secretária', 'secretaria', 'assistente administrativo', 'auxiliar administrativo'],
-      'técnico': ['técnico', 'tecnico', 'técnica', 'tecnica', 'suporte técnico', 'suporte tecnico', 'manutenção', 'manutencao'],
-      'logística': ['logística', 'logistica', 'expedição', 'expedicao', 'estoque', 'armazenagem', 'distribuição', 'distribuicao'],
-      'segurança': ['segurança', 'seguranca', 'segurança do trabalho', 'seguranca do trabalho', 'prevenção', 'prevencao'],
-      'estagiário': ['estagiário', 'estagiario', 'estágio', 'estagio', 'estudante', 'universitário', 'universitario']
-    };
-
-    // Verifica se a mensagem menciona o cargo diretamente
-    if (message.includes(jobTitle.split(' ')[0]) || message.includes(jobTitle.split(' ')[1])) {
-      relevance += 0.4;
-    }
-
-    // Verifica sinônimos para o cargo
-    for (const [category, terms] of Object.entries(synonyms)) {
-      if (jobTitle.includes(category) || jobDesc.includes(category)) {
-        for (const term of terms) {
-          if (message.includes(term)) {
-            relevance += 0.5; // Match forte com sinônimo
-            break;
-          }
-        }
-      }
-    }
-
-    // Verifica palavras-chave específicas da descrição na mensagem
-    const keywords = jobDesc.split(' ').filter(word => word.length > 3);
-    const messageWords = message.split(' ');
     
-    const commonWords = keywords.filter(keyword => 
-      messageWords.some(word => word.includes(keyword) || keyword.includes(word))
-    );
-
-    relevance += (commonWords.length / Math.max(keywords.length, 1)) * 0.3;
-
-    return Math.min(relevance, 1.0);
+    return scoredJobs
+      .filter(job => job.score > 0.1)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
   }
 
-  // Funções auxiliares mantidas para compatibilidade
-  getJobsBySeniority(seniority) {
-    return this.jobs.filter(job => 
-      job.senioridade.toLowerCase() === seniority.toLowerCase()
-    );
-  }
-
-  getJobsByLocation(location) {
-    return this.jobs.filter(job => 
-      job.localizacao.toLowerCase().includes(location.toLowerCase()) ||
-      job.localizacao.toLowerCase() === 'remoto'
-    );
-  }
-
-  getJobsBySkills(skills) {
-    const skillsArray = skills.toLowerCase().split(',').map(s => s.trim());
-    return this.jobs.filter(job => {
-      const jobDescription = job.descricao.toLowerCase();
-      return skillsArray.some(skill => jobDescription.includes(skill));
-    });
-  }
-
-  formatJobForDisplay(job) {
-    const score = job.score ? ` (${(job.score * 100).toFixed(0)}% compatível)` : '';
-    const suggestionTag = job.isSuggestion ? '💡 *SUGESTÃO* ' : '';
-    return `${suggestionTag}🏢 *${job.nome_vaga}*${score}
-📊 Senioridade: ${job.senioridade}
-📍 Localização: ${job.localizacao}
-📝 Descrição: ${job.descricao}`;
-  }
-
+  // Formata a lista de vagas para exibição
   formatJobsList(jobs) {
-    if (jobs.length === 0) {
-      return "Nenhuma vaga encontrada que corresponda ao seu perfil no momento.";
+    if (!jobs || jobs.length === 0) {
+      return '😔 Desculpe, não encontrei vagas adequadas no momento. Mas não se preocupe! Vou continuar monitorando e assim que surgir uma oportunidade que combine com seu perfil, entrarei em contato!\n\n💡 Dica: Você pode me enviar uma nova mensagem a qualquer momento para verificar se há novas vagas disponíveis.';
     }
 
-    // Verifica se são sugestões
-    const hasSuggestions = jobs.some(job => job.isSuggestion);
-    
-    let message = '';
-    if (hasSuggestions) {
-      message = `💡 *Sugestões de vagas relacionadas ao seu perfil:*\n\n`;
-    } else {
-      message = `🎯 *Vagas encontradas para você:*\n\n`;
-    }
+    let formattedList = '🎯 Vagas encontradas para você:\n\n';
     
     jobs.forEach((job, index) => {
-      message += `${index + 1}. ${this.formatJobForDisplay(job)}\n\n`;
+      formattedList += `${index + 1}. 🏢 ${job.title}\n`;
+      formattedList += `📊 Senioridade: ${job.level || 'Não especificado'}\n`;
+      formattedList += `📍 Localização: ${job.location}\n`;
+      formattedList += `🏭 Empresa: ${job.company}\n`;
+      
+      if (job.salary_range) {
+        formattedList += `💰 Salário: ${job.salary_range}\n`;
+      }
+      
+      // Trunca a descrição para não ficar muito longa
+      const shortDescription = job.description.length > 150 
+        ? job.description.substring(0, 150) + '...' 
+        : job.description;
+      
+      formattedList += `📝 Descrição: ${shortDescription}\n`;
+      
+      if (job.application_url) {
+        formattedList += `🔗 Candidatar-se: ${job.application_url}\n`;
+      }
+      
+      formattedList += '\n';
     });
 
-    if (hasSuggestions) {
-      message += `💡 *Estas são sugestões baseadas no seu perfil. Se nenhuma te interessar, me conte mais sobre suas preferências!*\n\n`;
-    }
-
-    message += `📋 Para se candidatar, acesse: https://app.pipefy.com/public/form/a19wdDh_`;
-    
-    return message;
+    return formattedList;
   }
 
-  // Verifica se o candidato é motorista
-  isMotoristaCandidate(candidateProfile, candidateMessage = '') {
-    const message = candidateMessage.toLowerCase();
-    const skills = (candidateProfile.skills || '').toLowerCase();
-    const position = (candidateProfile.current_position || '').toLowerCase();
-    const experience = (candidateProfile.experience || '').toLowerCase();
+  // Busca vagas por área específica
+  async getJobsByArea(area) {
+    try {
+      const { data, error } = await this.supabase
+        .from('jobs')
+        .select('*')
+        .eq('is_active', true)
+        .eq('area', area)
+        .order('created_at', { ascending: false });
 
-    const motoristaKeywords = [
-      'motorista', 'motorista de caminhão', 'motorista de carro', 'motorista de van',
-      'motorista de ônibus', 'motorista de entrega', 'motorista de coleta',
-      'cnh', 'cnh c', 'cnh d', 'cnh e', 'carteira de motorista',
-      'carteira nacional de habilitação', 'habilitação', 'habilitacao'
-    ];
+      if (error) {
+        console.error('❌ Erro ao buscar vagas por área:', error);
+        return [];
+      }
 
-    // Verifica na mensagem
-    if (motoristaKeywords.some(keyword => message.includes(keyword))) {
-      return true;
+      return data || [];
+    } catch (error) {
+      console.error('❌ Erro ao buscar vagas por área:', error);
+      return [];
     }
+  }
 
-    // Verifica nas habilidades
-    if (motoristaKeywords.some(keyword => skills.includes(keyword))) {
-      return true;
+  // Busca vagas por localização
+  async getJobsByLocation(location) {
+    try {
+      const { data, error } = await this.supabase
+        .from('jobs')
+        .select('*')
+        .eq('is_active', true)
+        .ilike('location', `%${location}%`)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('❌ Erro ao buscar vagas por localização:', error);
+        return [];
+      }
+
+      return data || [];
+    } catch (error) {
+      console.error('❌ Erro ao buscar vagas por localização:', error);
+      return [];
     }
+  }
 
-    // Verifica no cargo atual
-    if (motoristaKeywords.some(keyword => position.includes(keyword))) {
-      return true;
-    }
-
-    // Verifica na experiência
-    if (motoristaKeywords.some(keyword => experience.includes(keyword))) {
-      return true;
-    }
-
-    return false;
+  // Atualiza o cache de vagas
+  async refreshCache() {
+    console.log('🔄 Atualizando cache de vagas...');
+    this.lastFetch = null;
+    return await this.loadJobs();
   }
 }
 

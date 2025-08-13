@@ -18,10 +18,5 @@
   ],
   "env": {
     "NODE_ENV": "production"
-  },
-  "functions": {
-    "src/api-only.js": {
-      "maxDuration": 30
-    }
   }
 }

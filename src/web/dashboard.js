@@ -3,8 +3,10 @@ const path = require('path');
 const axios = require('axios');
 
 class Dashboard {
-  constructor() {
+  constructor(database = null, whatsappClient = null) {
     this.app = express();
+    this.database = database;
+    this.whatsappClient = whatsappClient;
     this.apiPort = 3000; // Porta da API principal
     this.dashboardPort = 3003; // Porta do dashboard
     
@@ -106,66 +108,30 @@ class Dashboard {
       }
     });
 
-    // Rota para obter notificações de empresas
-    this.app.get('/api/notifications/companies', async (req, res) => {
+    // Rota para obter notificações
+    this.app.get('/api/notifications/:type', async (req, res) => {
       try {
-        const response = await axios.get(`http://localhost:${this.apiPort}/notifications/companies`);
+        const { type } = req.params;
+        const response = await axios.get(`http://localhost:${this.apiPort}/notifications/${type}`);
         res.json(response.data);
       } catch (error) {
-        console.error('Erro ao obter notificações de empresas:', error);
+        console.error('Erro ao obter notificações:', error);
         res.status(500).json({ error: 'Erro ao obter notificações' });
       }
     });
 
-    // Rota para obter notificações de outros assuntos
-    this.app.get('/api/notifications/others', async (req, res) => {
+    // Rota para obter conversas ativas
+    this.app.get('/api/conversations', async (req, res) => {
       try {
-        const response = await axios.get(`http://localhost:${this.apiPort}/notifications/others`);
+        const response = await axios.get(`http://localhost:${this.apiPort}/conversations`);
         res.json(response.data);
       } catch (error) {
-        console.error('Erro ao obter notificações de outros assuntos:', error);
-        res.status(500).json({ error: 'Erro ao obter notificações' });
+        console.error('Erro ao obter conversas:', error);
+        res.status(500).json({ error: 'Erro ao obter conversas' });
       }
     });
 
-    // Rota para obter todas as notificações
-    this.app.get('/api/notifications/all', async (req, res) => {
-      try {
-        const response = await axios.get(`http://localhost:${this.apiPort}/notifications/all`);
-        res.json(response.data);
-      } catch (error) {
-        console.error('Erro ao obter todas as notificações:', error);
-        res.status(500).json({ error: 'Erro ao obter notificações' });
-      }
-    });
-
-    // Rota para obter notificações de candidatos
-    this.app.get('/api/notifications/candidates', async (req, res) => {
-      try {
-        const response = await axios.get(`http://localhost:${this.apiPort}/notifications/candidates`);
-        res.json(response.data);
-      } catch (error) {
-        console.error('Erro ao obter notificações de candidatos:', error);
-        res.status(500).json({ error: 'Erro ao obter notificações' });
-      }
-    });
-
-    // Rota para enviar mensagem manual
-    this.app.post('/api/send-message', async (req, res) => {
-      try {
-        const { phoneNumber, message } = req.body;
-        const response = await axios.post(`http://localhost:${this.apiPort}/whatsapp/send`, {
-          phoneNumber,
-          message
-        });
-        res.json(response.data);
-      } catch (error) {
-        console.error('Erro ao enviar mensagem:', error);
-        res.status(500).json({ error: 'Erro ao enviar mensagem' });
-      }
-    });
-
-    // Rota para assumir controle manual
+    // Rota para assumir controle
     this.app.post('/api/take-control', async (req, res) => {
       try {
         const { phoneNumber, agentId } = req.body;
@@ -180,7 +146,7 @@ class Dashboard {
       }
     });
 
-    // Rota para liberar controle manual
+    // Rota para liberar controle
     this.app.post('/api/release-control', async (req, res) => {
       try {
         const { phoneNumber } = req.body;
@@ -255,29 +221,37 @@ class Dashboard {
   }
 
   start() {
-    const port = process.env.PORT || this.dashboardPort;
+    const port = this.dashboardPort;
     
-    // Verifica se a porta está disponível
-    const server = this.app.listen(port, () => {
-      console.log(`🌐 Dashboard web rodando em: http://localhost:${port}`);
-      console.log(`🔐 Token de autenticação: ${this.authToken}`);
-      console.log(`📊 API disponível em: http://localhost:${this.apiPort}`);
-    });
+    try {
+      const server = this.app.listen(port, () => {
+        console.log(`🌐 Dashboard web rodando em: http://localhost:${port}`);
+        console.log(`🔐 Token de autenticação: ${this.authToken}`);
+        console.log(`📊 API disponível em: http://localhost:${this.apiPort}`);
+      });
 
-    // Tratamento de erro para porta em uso
-    server.on('error', (error) => {
-      if (error.code === 'EADDRINUSE') {
-        console.error(`❌ Porta ${port} já está em uso. Tentando porta ${port + 1}...`);
-        server.close();
-        this.app.listen(port + 1, () => {
-          console.log(`🌐 Dashboard web rodando em: http://localhost:${port + 1}`);
-          console.log(`🔐 Token de autenticação: ${this.authToken}`);
-          console.log(`📊 API disponível em: http://localhost:${this.apiPort}`);
-        });
-      } else {
-        console.error('❌ Erro ao iniciar dashboard:', error);
-      }
-    });
+      // Tratamento de erro para porta em uso
+      server.on('error', (error) => {
+        if (error.code === 'EADDRINUSE') {
+          console.error(`❌ Porta ${port} já está em uso. Tentando porta ${port + 1}...`);
+          server.close();
+          this.app.listen(port + 1, () => {
+            console.log(`🌐 Dashboard web rodando em: http://localhost:${port + 1}`);
+            console.log(`🔐 Token de autenticação: ${this.authToken}`);
+            console.log(`📊 API disponível em: http://localhost:${this.apiPort}`);
+          });
+        } else {
+          console.error('❌ Erro ao iniciar dashboard:', error);
+        }
+      });
+    } catch (error) {
+      console.error('❌ Erro crítico ao iniciar dashboard:', error);
+    }
+  }
+
+  // Método para definir o cliente WhatsApp
+  setWhatsAppClient(whatsappClient) {
+    this.whatsappClient = whatsappClient;
   }
 }
 

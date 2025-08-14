@@ -1,5 +1,6 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal');
 const Database = require('../database/database');
 const GroqClient = require('../ai/groqClient');
 const BusinessHoursService = require('../services/businessHoursService');
@@ -10,7 +11,9 @@ class WhatsAppClientSimple {
     this.client = new Client({
       authStrategy: new LocalAuth(),
       puppeteer: {
-        headless: true,
+        headless: config.whatsapp.headless,
+        executablePath: config.whatsapp.executablePath || undefined,
+        defaultViewport: null,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -25,31 +28,43 @@ class WhatsAppClientSimple {
           '--mute-audio',
           '--no-default-browser-check',
           '--disable-web-security',
-          '--disable-features=VizDisplayCompositor',
+          '--ignore-certificate-errors',
+          '--ignore-ssl-errors',
+          '--allow-running-insecure-content',
           '--disable-background-timer-throttling',
           '--disable-backgrounding-occluded-windows',
           '--disable-renderer-backgrounding',
-          '--disable-field-trial-config',
-          '--disable-ipc-flooding-protection',
-          '--disable-background-networking',
-          '--disable-breakpad',
-          '--disable-component-extensions-with-background-pages',
-          '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-          '--enable-features=NetworkService,NetworkServiceLogging',
-          '--force-color-profile=srgb',
-          '--metrics-recording-only',
-          '--safebrowsing-disable-auto-update',
-          '--ignore-certificate-errors',
-          '--ignore-ssl-errors',
-          '--ignore-certificate-errors-spki-list',
-          '--allow-running-insecure-content',
           '--disable-features=TranslateUI',
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-site-isolation-trials',
+          '--no-zygote',
+          '--disable-ipc-flooding-protection',
+          '--disable-hang-monitor',
+          '--disable-prompt-on-repost',
+          '--disable-client-side-phishing-detection',
           '--disable-component-extensions-with-background-pages',
-          '--disable-extension-network-service',
-          '--disable-features=NetworkService'
+          '--disable-default-apps',
+          '--disable-sync',
+          '--disable-translate',
+          '--hide-scrollbars',
+          '--mute-audio',
+          '--no-default-browser-check',
+          '--no-first-run',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-features=TranslateUI',
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-site-isolation-trials',
+          '--no-zygote',
+          '--disable-ipc-flooding-protection',
+          '--disable-hang-monitor',
+          '--disable-prompt-on-repost',
+          '--disable-client-side-phishing-detection',
+          '--disable-component-extensions-with-background-pages'
         ],
-        timeout: 120000,
-        protocolTimeout: 120000
+        timeout: 180000,
+        protocolTimeout: 180000
       }
     });
 
@@ -58,6 +73,8 @@ class WhatsAppClientSimple {
     this.isReady = false;
     this.retryCount = 0;
     this.maxRetries = 3;
+    this.isInitializing = false;
+    this.initializePromise = null;
     
     // Sistema de timeout
     this.activeConversations = new Map(); // phoneNumber -> { timeoutId, lastActivity }
@@ -72,17 +89,61 @@ class WhatsAppClientSimple {
   setupEventHandlers() {
     // Evento quando o QR Code é gerado
     this.client.on('qr', (qr) => {
-      console.log('QR Code gerado. Escaneie com o WhatsApp:');
-      this.qrCode = qr; // Salva o QR Code para uso posterior
-      qrcode.generate(qr, { small: true });
+      console.log('📱 QR Code gerado pelo WhatsApp!');
+      console.log('📋 QR Code details:', {
+        length: qr.length,
+        startsWith: qr.substring(0, 20) + '...',
+        timestamp: new Date().toISOString(),
+        clientStatus: {
+          isReady: this.isReady,
+          hasClient: !!this.client,
+          hasPupPage: !!this.client?.pupPage,
+          isConnected: this.isConnected()
+        }
+      });
+      
+      // Salva o QR Code para uso posterior
+      this.qrCode = qr;
+      console.log('💾 QR Code salvo na memória:', {
+        qrCodeSaved: !!this.qrCode,
+        qrCodeLength: this.qrCode?.length
+      });
+      
+      // Gera QR Code no terminal
+      try {
+        qrcodeTerminal.generate(qr, { small: true });
+        console.log('📱 QR Code gerado no terminal com sucesso');
+      } catch (error) {
+        console.error('❌ Erro ao gerar QR Code no terminal:', error);
+      }
     });
 
     // Evento quando o cliente está pronto
     this.client.on('ready', () => {
       console.log('✅ Cliente WhatsApp conectado e pronto!');
+      console.log('📋 Status antes de marcar como pronto:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage
+      });
+      
       this.isReady = true;
       this.retryCount = 0; // Reset retry count on success
-      this.qrCode = null; // Limpa o QR Code quando conectado
+      
+      // Limpa o QR Code quando conectado
+      if (this.qrCode) {
+        console.log('🧹 Limpando QR Code após conexão');
+        this.qrCode = null;
+      }
+      
+      console.log('📋 Status após marcar como pronto:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage,
+        isConnected: this.isConnected()
+      });
     });
 
     // Evento quando uma mensagem é recebida
@@ -93,23 +154,58 @@ class WhatsAppClientSimple {
     // Evento de autenticação
     this.client.on('authenticated', () => {
       console.log('🔐 WhatsApp autenticado com sucesso!');
+      console.log('📋 Status após autenticação:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage
+      });
     });
 
     // Evento de desconexão
     this.client.on('disconnected', (reason) => {
       console.log('❌ Cliente WhatsApp desconectado:', reason);
+      console.log('📋 Status antes de marcar como desconectado:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage
+      });
+      
       this.isReady = false;
+      
+      console.log('📋 Status após marcar como desconectado:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage
+      });
     });
 
-    // Evento de erro
-    this.client.on('auth_failure', (msg) => {
-      console.error('❌ Falha na autenticação:', msg);
-    });
-
-    // Evento de loading
+    // Evento de loading screen
     this.client.on('loading_screen', (percent, message) => {
       console.log(`📱 Carregando WhatsApp: ${percent}% - ${message}`);
+      console.log('📋 Status durante carregamento:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage,
+        percent: percent
+      });
     });
+
+    // Evento de auth_failure
+    this.client.on('auth_failure', (message) => {
+      console.log('❌ Falha na autenticação WhatsApp:', message);
+      console.log('📋 Status após falha de autenticação:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage
+      });
+    });
+
+    console.log('📱 Event handlers configurados com sucesso');
   }
 
   // Sistema de controle manual
@@ -607,30 +703,100 @@ Obrigado por escolher a ${config.company.name}! 🙏
 
   async initialize() {
     try {
+      if (this.isInitializing) {
+        console.log('⏳ Inicialização do WhatsApp já em andamento...');
+        return this.initializePromise;
+      }
+      this.isInitializing = true;
       console.log('🚀 Iniciando cliente WhatsApp (versão simplificada)...');
       console.log('⏳ Aguarde, isso pode levar alguns minutos...');
+      console.log('🔧 Configurações do Puppeteer:', {
+        headless: true,
+        timeout: 120000,
+        protocolTimeout: 120000,
+        args: this.client?.puppeteer?.args?.length || 'não disponível',
+        executablePath: process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || (require('../config/config').whatsapp.executablePath || 'auto')
+      });
       
-      await this.client.initialize();
+      console.log('📋 Status inicial:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage,
+        retryCount: this.retryCount
+      });
+      
+      // Timeout muito longo para inicialização
+      const initPromise = this.client.initialize();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Inicialização timeout')), 180000)
+      );
+      
+      console.log('🔄 Aguardando inicialização do WhatsApp...');
+      console.log('⏰ Timeout configurado para 180 segundos');
+      
+      this.initializePromise = Promise.race([initPromise, timeoutPromise]);
+      await this.initializePromise;
+      
+      console.log('✅ Promise.race concluída - WhatsApp inicializado!');
+      console.log('📋 Status após Promise.race:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage
+      });
+      
+      // Aguarda um pouco mais para garantir que está realmente pronto
+      console.log('⏳ Aguardando 5 segundos extras para estabilização...');
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      console.log('📋 Status final após estabilização:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage,
+        isConnected: this.isConnected()
+      });
+      
+      console.log('✅ WhatsApp inicializado com sucesso!');
       
     } catch (error) {
-      console.error('Erro ao inicializar cliente WhatsApp:', error);
+      console.error('❌ Erro ao inicializar cliente WhatsApp:', error);
+      console.error('📋 Detalhes do erro:', {
+        message: error.message,
+        stack: error.stack?.split('\n')[0],
+        retryCount: this.retryCount,
+        maxRetries: this.maxRetries
+      });
+      
+      console.log('📋 Status no momento do erro:', {
+        isReady: this.isReady,
+        qrCode: !!this.qrCode,
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage
+      });
       
       // Tenta reinicializar se for erro de protocolo e ainda não excedeu tentativas
       if ((error.message.includes('Protocol error') || 
            error.message.includes('Execution context was destroyed') ||
-           error.message.includes('Navigation timeout')) && 
+           error.message.includes('Navigation timeout') ||
+           error.message.includes('Inicialização timeout')) && 
           this.retryCount < this.maxRetries) {
         
         this.retryCount++;
         console.log(`🔄 Tentativa ${this.retryCount}/${this.maxRetries} - Reinicializando...`);
         
         // Aguarda um pouco antes de tentar novamente
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        console.log('⏳ Aguardando 10 segundos antes da próxima tentativa...');
+        await new Promise(resolve => setTimeout(resolve, 10000));
         
         await this.retryInitialize();
       } else {
+        console.error('❌ Máximo de tentativas atingido ou erro não recuperável');
         throw error;
       }
+    } finally {
+      this.isInitializing = false;
     }
   }
 
@@ -644,6 +810,8 @@ Obrigado por escolher a ${config.company.name}! 🙏
         authStrategy: new LocalAuth(),
         puppeteer: {
           headless: true,
+          executablePath: process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || (require('../config/config').whatsapp.executablePath || undefined),
+          defaultViewport: null,
           args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -658,28 +826,12 @@ Obrigado por escolher a ${config.company.name}! 🙏
             '--mute-audio',
             '--no-default-browser-check',
             '--disable-web-security',
-            '--disable-features=VizDisplayCompositor',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding',
-            '--disable-field-trial-config',
-            '--disable-ipc-flooding-protection',
-            '--disable-background-networking',
-            '--disable-breakpad',
-            '--disable-component-extensions-with-background-pages',
-            '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-            '--enable-features=NetworkService,NetworkServiceLogging',
-            '--force-color-profile=srgb',
-            '--metrics-recording-only',
-            '--safebrowsing-disable-auto-update',
             '--ignore-certificate-errors',
             '--ignore-ssl-errors',
-            '--ignore-certificate-errors-spki-list',
             '--allow-running-insecure-content',
-            '--disable-features=TranslateUI',
-            '--disable-component-extensions-with-background-pages',
-            '--disable-extension-network-service',
-            '--disable-features=NetworkService'
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-site-isolation-trials',
+            '--no-zygote'
           ],
           timeout: 120000,
           protocolTimeout: 120000
@@ -717,6 +869,15 @@ Obrigado por escolher a ${config.company.name}! 🙏
 
   async generateQRCode() {
     try {
+      console.log('📱 Iniciando geração de QR Code...');
+      console.log('📋 Status do cliente:', {
+        isConnected: this.isConnected(),
+        hasClient: !!this.client,
+        hasPupPage: !!this.client?.pupPage,
+        qrCodeAvailable: !!this.qrCode,
+        isReady: this.isReady
+      });
+
       if (this.isConnected()) {
         console.log('📱 WhatsApp já está conectado');
         return null;
@@ -729,7 +890,7 @@ Obrigado por escolher a ${config.company.name}! 🙏
 
       // Verifica se há um QR Code disponível
       if (this.qrCode) {
-        console.log('📱 QR Code já disponível');
+        console.log('📱 QR Code já disponível, gerando base64...');
         // Gera QR Code em base64
         const qrCodeBase64 = await qrcode.toDataURL(this.qrCode, {
           width: 300,
@@ -740,6 +901,7 @@ Obrigado por escolher a ${config.company.name}! 🙏
           }
         });
         
+        console.log('📱 QR Code base64 gerado com sucesso!');
         // Remove o prefixo data:image/png;base64, para retornar apenas o base64
         return qrCodeBase64.split(',')[1];
       }
@@ -750,18 +912,35 @@ Obrigado por escolher a ${config.company.name}! 🙏
       // Limpa QR Code anterior
       this.qrCode = null;
       
-      // Tenta reinicializar o cliente se necessário
-      if (!this.client.pupPage) {
-        console.log('📱 Reinicializando cliente WhatsApp...');
-        await this.initialize();
+      // Se não estiver conectado, inicia a inicialização em background (não bloqueia)
+      if (!this.isConnected()) {
+        console.log('📱 WhatsApp não está conectado, reinicializando (background)...');
+        try {
+          // Dispara a inicialização sem aguardar, evitando concorrência
+          if (!this.isReady && !this.isInitializing) {
+            this.initialize().catch((error) => {
+              console.error('❌ Erro ao reinicializar WhatsApp (background):', error);
+            });
+          } else if (this.isInitializing) {
+            console.log('⏳ Já existe uma inicialização em andamento, aguardando QR...');
+          }
+        } catch (error) {
+          console.error('❌ Erro ao agendar reinicialização do WhatsApp:', error);
+        }
       }
       
-      // Aguarda até 10 segundos para o QR Code ser gerado
+      // Aguarda até 90 segundos para o QR Code ser gerado
       let attempts = 0;
-      const maxAttempts = 10;
+      const maxAttempts = 90;
       
       while (!this.qrCode && attempts < maxAttempts) {
         console.log(`📱 Tentativa ${attempts + 1}/${maxAttempts} - Aguardando QR Code...`);
+        console.log('📋 Status atual:', {
+          qrCode: !!this.qrCode,
+          isReady: this.isReady,
+          hasPupPage: !!this.client?.pupPage,
+          isConnected: this.isConnected()
+        });
         await new Promise(resolve => setTimeout(resolve, 1000));
         attempts++;
       }
@@ -778,20 +957,33 @@ Obrigado por escolher a ${config.company.name}! 🙏
           }
         });
         
+        console.log('📱 QR Code base64 gerado com sucesso!');
         // Remove o prefixo data:image/png;base64, para retornar apenas o base64
         return qrCodeBase64.split(',')[1];
       } else {
         console.log('📱 QR Code não disponível após tentativas');
+        console.log('📋 Status final:', {
+          qrCode: !!this.qrCode,
+          isReady: this.isReady,
+          hasPupPage: !!this.client?.pupPage,
+          attempts: attempts,
+          isConnected: this.isConnected()
+        });
         return null;
       }
     } catch (error) {
       console.error('❌ Erro ao gerar QR Code:', error);
+      console.error('📋 Detalhes do erro:', {
+        message: error.message,
+        stack: error.stack?.split('\n')[0]
+      });
       return null;
     }
   }
 
   isConnected() {
-    return this.isReady;
+    // Verifica se está realmente conectado
+    return this.isReady && this.client && this.client.pupPage;
   }
 
   // Método para forçar desconexão e gerar novo QR Code
@@ -821,31 +1013,12 @@ Obrigado por escolher a ${config.company.name}! 🙏
               '--mute-audio',
               '--no-default-browser-check',
               '--disable-web-security',
-              '--disable-features=VizDisplayCompositor',
-              '--disable-background-timer-throttling',
-              '--disable-backgrounding-occluded-windows',
-              '--disable-renderer-backgrounding',
-              '--disable-field-trial-config',
-              '--disable-ipc-flooding-protection',
-              '--disable-background-networking',
-              '--disable-breakpad',
-              '--disable-component-extensions-with-background-pages',
-              '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-              '--enable-features=NetworkService,NetworkServiceLogging',
-              '--force-color-profile=srgb',
-              '--metrics-recording-only',
-              '--safebrowsing-disable-auto-update',
               '--ignore-certificate-errors',
               '--ignore-ssl-errors',
-              '--ignore-certificate-errors-spki-list',
-              '--allow-running-insecure-content',
-              '--disable-features=TranslateUI',
-              '--disable-component-extensions-with-background-pages',
-              '--disable-extension-network-service',
-              '--disable-features=NetworkService'
+              '--allow-running-insecure-content'
             ],
-            timeout: 120000,
-            protocolTimeout: 120000,
+            timeout: 60000,
+            protocolTimeout: 60000,
             executablePath: process.platform === 'win32' ? undefined : '/usr/bin/google-chrome-stable'
           }
         });
@@ -926,3 +1099,4 @@ Obrigado por escolher a ${config.company.name}! 🙏
 }
 
 module.exports = WhatsAppClientSimple;
+
